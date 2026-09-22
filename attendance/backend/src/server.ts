@@ -578,7 +578,7 @@ app.post('/api/attendance/mark', (req, res) => {
 // Dedicated QR Endpoint (alias to mark for client convenience)
 app.post('/api/attendance/mark-qr', (req, res, next) => {
   req.url = '/api/attendance/mark';
-  app.handle(req, res, next);
+  (app as any).handle(req, res, next);
 });
 
 // Complete attendance audit trail (Protected)
