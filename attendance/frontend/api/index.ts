@@ -35,15 +35,49 @@ const QR_SIGNING_SECRET = process.env.QR_SIGNING_SECRET || 'pravahax-qr-signing-
 const QR_ROTATION_INTERVAL = 4;
 const QR_EXPIRATION_GRACE = 4;
 
-// Default students map
-const studentRoster: Record<string, string> = {
-  'STU001': 'Rahul Patil',
-  'STU002': 'Sneha Shah',
-  'STU003': 'Aman Verma',
-  's1': 'Rahul Patil',
-  's2': 'Sneha Shah',
-  's3': 'Aman Verma'
-};
+// 30 Student Roster
+export const STUDENT_ROSTER_LIST = [
+  { enrollment: 'STU001', name: 'Rahul Patil' },
+  { enrollment: 'STU002', name: 'Sneha Shah' },
+  { enrollment: 'STU003', name: 'Aman Verma' },
+  { enrollment: 'STU004', name: 'Priya Sharma' },
+  { enrollment: 'STU005', name: 'Rohan Mehta' },
+  { enrollment: 'STU006', name: 'Ananya Desai' },
+  { enrollment: 'STU007', name: 'Aditya Joshi' },
+  { enrollment: 'STU008', name: 'Kavya Reddy' },
+  { enrollment: 'STU009', name: 'Siddharth Malhotra' },
+  { enrollment: 'STU010', name: 'Riya Sen' },
+  { enrollment: 'STU011', name: 'Aryan Gupta' },
+  { enrollment: 'STU012', name: 'Tanvi Kulkarni' },
+  { enrollment: 'STU013', name: 'Varun Nair' },
+  { enrollment: 'STU014', name: 'Pooja Iyer' },
+  { enrollment: 'STU015', name: 'Harsh Pandey' },
+  { enrollment: 'STU016', name: 'Neha Choudhary' },
+  { enrollment: 'STU017', name: 'Yash Singhania' },
+  { enrollment: 'STU018', name: 'Divya Bhat' },
+  { enrollment: 'STU019', name: 'Kunal Agrawal' },
+  { enrollment: 'STU020', name: 'Shreya Kapoor' },
+  { enrollment: 'STU021', name: 'Gaurav Mishra' },
+  { enrollment: 'STU022', name: 'Meera Pillai' },
+  { enrollment: 'STU023', name: 'Nikhil Saxena' },
+  { enrollment: 'STU024', name: 'Isha Jain' },
+  { enrollment: 'STU025', name: 'Pranav Rao' },
+  { enrollment: 'STU026', name: 'Swati Tiwari' },
+  { enrollment: 'STU027', name: 'Vivek Chauhan' },
+  { enrollment: 'STU028', name: 'Ritu Chawla' },
+  { enrollment: 'STU029', name: 'Manan Bhatt' },
+  { enrollment: 'STU030', name: 'Kriti Roy' }
+];
+
+const studentRoster: Record<string, string> = {};
+STUDENT_ROSTER_LIST.forEach((s, idx) => {
+  studentRoster[s.enrollment] = s.name;
+  studentRoster[`s${idx + 1}`] = s.name;
+  // Also support STUD prefix (e.g. STUD002 -> Sneha Shah)
+  const studKey = s.enrollment.replace('STU', 'STUD');
+  studentRoster[studKey] = s.name;
+});
+
 
 // Generate signed AES-256-GCM opaque QR credential
 function generateQrPayload(session: { id: string; class_id: string; teacher_id: string; session_secret: string }) {
@@ -261,8 +295,14 @@ export default async function handler(req: any, res: any) {
           verification_method: a.verification_method,
           marked_at: a.marked_at
         }))
-      }
+      },
+      logs: attendanceRecords
     });
+  }
+
+  // 6.5 Students Roster List
+  if (pathname === '/api/students') {
+    return res.status(200).json({ students: STUDENT_ROSTER_LIST });
   }
 
   // 7. On-demand Dynamic QR token rotation
@@ -293,7 +333,10 @@ export default async function handler(req: any, res: any) {
   // 9. Mark Student Attendance (Passwordless)
   if (pathname === '/api/attendance/mark' || pathname === '/api/attendance/mark-qr') {
     const { enrollment_number, student_id, pin, qr_token } = body;
-    const enrollment = (enrollment_number || student_id || '').trim().toUpperCase();
+    let enrollment = (enrollment_number || student_id || '').trim().toUpperCase();
+    if (enrollment.startsWith('STUD') && !enrollment.startsWith('STUDENT')) {
+      enrollment = enrollment.replace('STUD', 'STU');
+    }
 
     if (!enrollment) {
       return res.status(400).json({ error: 'Enrollment number is required' });
@@ -334,13 +377,13 @@ export default async function handler(req: any, res: any) {
     }
 
     // Duplicate check
-    const existing = attendanceRecords.find(r => r.session_id === activeSession?.id && r.enrollment_number === enrollment);
+    const existing = attendanceRecords.find(r => r.session_id === activeSession?.id && (r.enrollment_number === enrollment || r.student_id === enrollment));
     if (existing) {
       return res.status(400).json({ error: 'Already marked present for this session' });
     }
 
     // Dynamic resolution of student name (supports anyone as requested)
-    const studentName = studentRoster[enrollment] || `Student (${enrollment})`;
+    const studentName = studentRoster[enrollment] || studentRoster[`s${enrollment.replace('STU', '')}`] || `Student (${enrollment})`;
 
     const record: AttendanceRecord = {
       id: crypto.randomUUID(),
@@ -360,13 +403,16 @@ export default async function handler(req: any, res: any) {
       message: verificationMethod === 'DYNAMIC_QR' ? 'Attendance Recorded (Dynamic QR Verified)' : 'Attendance Recorded (Code Verified)',
       class_name: 'Data Structures',
       subject: 'CS101',
+      student_name: studentName,
+      enrollment_number: enrollment,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      verification_method: verificationMethod
+      verification_method: verificationMethod,
+      record
     });
   }
 
-  // 10. Complete Audit Logs
-  if (pathname === '/api/attendance/logs') {
+  // 10. Complete Audit Logs (Public & Teacher access)
+  if (pathname === '/api/attendance/logs' || pathname === '/api/session/logs') {
     return res.status(200).json({ logs: attendanceRecords });
   }
 

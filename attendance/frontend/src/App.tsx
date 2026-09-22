@@ -31,6 +31,49 @@ export interface AttendanceSuccessData {
   message: string;
 }
 
+// 30 Student Registered Roster (Passwordless institutional accounts)
+export const STUDENT_ROSTER_LIST = [
+  { enrollment: 'STU001', name: 'Rahul Patil' },
+  { enrollment: 'STU002', name: 'Sneha Shah' },
+  { enrollment: 'STU003', name: 'Aman Verma' },
+  { enrollment: 'STU004', name: 'Priya Sharma' },
+  { enrollment: 'STU005', name: 'Rohan Mehta' },
+  { enrollment: 'STU006', name: 'Ananya Desai' },
+  { enrollment: 'STU007', name: 'Aditya Joshi' },
+  { enrollment: 'STU008', name: 'Kavya Reddy' },
+  { enrollment: 'STU009', name: 'Siddharth Malhotra' },
+  { enrollment: 'STU010', name: 'Riya Sen' },
+  { enrollment: 'STU011', name: 'Aryan Gupta' },
+  { enrollment: 'STU012', name: 'Tanvi Kulkarni' },
+  { enrollment: 'STU013', name: 'Varun Nair' },
+  { enrollment: 'STU014', name: 'Pooja Iyer' },
+  { enrollment: 'STU015', name: 'Harsh Pandey' },
+  { enrollment: 'STU016', name: 'Neha Choudhary' },
+  { enrollment: 'STU017', name: 'Yash Singhania' },
+  { enrollment: 'STU018', name: 'Divya Bhat' },
+  { enrollment: 'STU019', name: 'Kunal Agrawal' },
+  { enrollment: 'STU020', name: 'Shreya Kapoor' },
+  { enrollment: 'STU021', name: 'Gaurav Mishra' },
+  { enrollment: 'STU022', name: 'Meera Pillai' },
+  { enrollment: 'STU023', name: 'Nikhil Saxena' },
+  { enrollment: 'STU024', name: 'Isha Jain' },
+  { enrollment: 'STU025', name: 'Pranav Rao' },
+  { enrollment: 'STU026', name: 'Swati Tiwari' },
+  { enrollment: 'STU027', name: 'Vivek Chauhan' },
+  { enrollment: 'STU028', name: 'Ritu Chawla' },
+  { enrollment: 'STU029', name: 'Manan Bhatt' },
+  { enrollment: 'STU030', name: 'Kriti Roy' }
+];
+
+export const getResolvedStudentName = (rawInput: string) => {
+  let clean = (rawInput || '').trim().toUpperCase();
+  if (clean.startsWith('STUD') && !clean.startsWith('STUDENT')) {
+    clean = clean.replace('STUD', 'STU');
+  }
+  const match = STUDENT_ROSTER_LIST.find(s => s.enrollment === clean || s.enrollment === rawInput.trim().toUpperCase());
+  return match ? match.name : '';
+};
+
 function App() {
   // Navigation Route State ('/' | '/teacher/login' | '/teacher' | '/student')
   const [currentPath, setCurrentPath] = useState<string>(window.location.pathname || '/');
@@ -74,6 +117,8 @@ function App() {
   const [studentSuccess, setStudentSuccess] = useState<AttendanceSuccessData | null>(null);
   const [manualQrInput, setManualQrInput] = useState('');
   const [showManualInput, setShowManualInput] = useState(false);
+  const [studentRecentLogs, setStudentRecentLogs] = useState<any[]>([]);
+  const [activeLectureInfo, setActiveLectureInfo] = useState<{ active: boolean; className?: string; mode?: string } | null>(null);
 
   // Countdown & Polling Refs
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -172,13 +217,21 @@ function App() {
             setQrToken(data.session.currentQrToken);
           }
           if (data.session.attendees) {
-            setStudents(data.session.attendees.map((a: any) => ({
+            const mappedAttendees = data.session.attendees.map((a: any) => ({
               id: a.student_id,
               name: a.name,
               enrollment_number: a.enrollment_number,
               status: a.verification_method === 'DYNAMIC_QR' ? 'Dynamic QR Verified' : 'Code Verified',
-              method: a.verification_method
-            })));
+              method: a.verification_method,
+              marked_at: a.marked_at || new Date().toISOString()
+            }));
+            setStudents(mappedAttendees);
+            if (!data.logs || data.logs.length === 0) {
+              setLogs(mappedAttendees);
+            }
+          }
+          if (data.logs && data.logs.length > 0) {
+            setLogs(data.logs);
           }
         } else {
           setSessionActive(false);
@@ -297,20 +350,56 @@ function App() {
     };
   }, [sessionActive, sessionMode, teacherToken, pollFreshQrToken]);
 
-  // Controlled Polling for Live Attendance Count (every 4 seconds)
+  // Controlled Polling for Live Attendance Count (every 3 seconds)
   useEffect(() => {
     if (sessionActive && teacherToken) {
       if (liveCountPollIntervalRef.current) clearInterval(liveCountPollIntervalRef.current);
       liveCountPollIntervalRef.current = setInterval(() => {
         checkActiveSession();
-      }, 4000);
+        fetchLogs();
+      }, 3000);
     } else {
       if (liveCountPollIntervalRef.current) clearInterval(liveCountPollIntervalRef.current);
     }
     return () => {
       if (liveCountPollIntervalRef.current) clearInterval(liveCountPollIntervalRef.current);
     };
-  }, [sessionActive, teacherToken, checkActiveSession]);
+  }, [sessionActive, teacherToken, checkActiveSession, fetchLogs]);
+
+  // Student Portal Live Polling: lecture status & live activity log stream
+  useEffect(() => {
+    if (currentPath !== '/student') return;
+
+    const pollStudentActivity = async () => {
+      try {
+        const res = await fetch('/api/session/active');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.active && data.session) {
+            setActiveLectureInfo({
+              active: true,
+              className: 'Data Structures (CS101)',
+              mode: data.session.mode
+            });
+            if (data.session.attendees && data.session.attendees.length > 0) {
+              setStudentRecentLogs(data.session.attendees);
+            }
+          } else {
+            setActiveLectureInfo({ active: false });
+          }
+          if (data.logs && data.logs.length > 0) {
+            setStudentRecentLogs(data.logs);
+          }
+        }
+      } catch (e) {
+        console.warn('Student activity poll error:', e);
+      }
+    };
+
+    pollStudentActivity();
+    const interval = setInterval(pollStudentActivity, 3000);
+    return () => clearInterval(interval);
+  }, [currentPath]);
 
   // Socket.IO Events
   useEffect(() => {
@@ -427,9 +516,12 @@ function App() {
   // Submit via Attendance Code
   const handleStudentSubmitCode = async () => {
     setStudentError('');
-    const enrollment = enrollmentInput.trim().toUpperCase();
+    let enrollment = enrollmentInput.trim().toUpperCase();
+    if (enrollment.startsWith('STUD') && !enrollment.startsWith('STUDENT')) {
+      enrollment = enrollment.replace('STUD', 'STU');
+    }
     if (!enrollment) {
-      setStudentError('Please enter your institutional Enrollment Number.');
+      setStudentError('Please enter or select your institutional Enrollment Number.');
       return;
     }
 
@@ -460,6 +552,17 @@ function App() {
           message: data.message
         });
         setStudentPinInput('');
+
+        // Push immediately into live downside activity log
+        const resolvedName = getResolvedStudentName(enrollment) || (data.record && data.record.name) || data.student_name || `Student (${enrollment})`;
+        const newRecord = {
+          name: resolvedName,
+          enrollment_number: enrollment,
+          marked_at: new Date().toISOString(),
+          status: 'PRESENT',
+          verification_method: 'ATTENDANCE_CODE'
+        };
+        setStudentRecentLogs(prev => [newRecord, ...prev.filter(p => p.enrollment_number !== enrollment)]);
       } else {
         setStudentError(data.error || 'Failed to record attendance. Please check code and try again.');
       }
@@ -476,9 +579,12 @@ function App() {
     setIsScanningLocked(true);
     setStudentError('');
 
-    const enrollment = enrollmentInput.trim().toUpperCase();
+    let enrollment = enrollmentInput.trim().toUpperCase();
+    if (enrollment.startsWith('STUD') && !enrollment.startsWith('STUDENT')) {
+      enrollment = enrollment.replace('STUD', 'STU');
+    }
     if (!enrollment) {
-      setStudentError('Please enter your Enrollment Number before scanning.');
+      setStudentError('Please enter or select your Enrollment Number before scanning.');
       setIsScanningLocked(false);
       return;
     }
@@ -504,6 +610,17 @@ function App() {
           method: 'Dynamic QR',
           message: data.message
         });
+
+        // Push immediately into live downside activity log
+        const resolvedName = getResolvedStudentName(enrollment) || (data.record && data.record.name) || data.student_name || `Student (${enrollment})`;
+        const newRecord = {
+          name: resolvedName,
+          enrollment_number: enrollment,
+          marked_at: new Date().toISOString(),
+          status: 'PRESENT',
+          verification_method: 'DYNAMIC_QR'
+        };
+        setStudentRecentLogs(prev => [newRecord, ...prev.filter(p => p.enrollment_number !== enrollment)]);
       } else {
         setStudentError(data.error || 'Invalid or expired QR credential.');
         // Debounce before allowing next scan attempt
@@ -911,29 +1028,45 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {logs && logs.length > 0 ? (
-                    logs.map((row, i) => (
-                      <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                        <td style={{ padding: '10px 8px', color: '#94a3b8' }}>
-                          {new Date(row.marked_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                        </td>
-                        <td style={{ padding: '10px 8px', fontWeight: 600, color: '#f8fafc' }}>{row.name}</td>
-                        <td style={{ padding: '10px 8px', color: '#94a3b8' }}>{row.enrollment_number || '-'}</td>
-                        <td style={{ padding: '10px 8px', color: '#34d399', fontWeight: 600 }}>✓ Present</td>
-                        <td style={{ padding: '10px 8px' }}>
-                          <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: row.verification_method === 'DYNAMIC_QR' ? 'rgba(59, 130, 246, 0.2)' : 'rgba(16, 185, 129, 0.2)', color: row.verification_method === 'DYNAMIC_QR' ? '#60a5fa' : '#34d399' }}>
-                            {row.verification_method}
-                          </span>
+                  {(() => {
+                    const effectiveLogs = (logs && logs.length > 0)
+                      ? logs
+                      : (students && students.length > 0
+                          ? students.map(s => ({
+                              name: s.name,
+                              enrollment_number: s.enrollment_number,
+                              marked_at: (s as any).marked_at || new Date().toISOString(),
+                              status: 'PRESENT',
+                              verification_method: s.method || 'ATTENDANCE_CODE'
+                            }))
+                          : []);
+
+                    if (effectiveLogs.length > 0) {
+                      return effectiveLogs.map((row: any, i: number) => (
+                        <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                          <td style={{ padding: '10px 8px', color: '#94a3b8' }}>
+                            {new Date(row.marked_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                          </td>
+                          <td style={{ padding: '10px 8px', fontWeight: 600, color: '#f8fafc' }}>{row.name}</td>
+                          <td style={{ padding: '10px 8px', color: '#94a3b8' }}>{row.enrollment_number || '-'}</td>
+                          <td style={{ padding: '10px 8px', color: '#34d399', fontWeight: 600 }}>✓ Present</td>
+                          <td style={{ padding: '10px 8px' }}>
+                            <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: row.verification_method === 'DYNAMIC_QR' ? 'rgba(59, 130, 246, 0.2)' : 'rgba(16, 185, 129, 0.2)', color: row.verification_method === 'DYNAMIC_QR' ? '#60a5fa' : '#34d399' }}>
+                              {row.verification_method}
+                            </span>
+                          </td>
+                        </tr>
+                      ));
+                    }
+
+                    return (
+                      <tr>
+                        <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#64748b' }}>
+                          No attendance records found yet.
                         </td>
                       </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#64748b' }}>
-                        No attendance records found yet.
-                      </td>
-                    </tr>
-                  )}
+                    );
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -945,45 +1078,72 @@ function App() {
 
   // 4. STUDENT ATTENDANCE PORTAL ( /student )
   if (currentPath === '/student') {
+    const resolvedStudentName = getResolvedStudentName(enrollmentInput);
+
     return (
-      <div style={{ minHeight: '100vh', background: '#0b0f19', color: '#f8fafc', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px 14px', fontFamily: 'system-ui, -apple-system, sans-serif', boxSizing: 'border-box' }}>
-        <div style={{ width: '100%', maxWidth: 440, background: '#131b2e', border: '1px solid #1e293b', borderRadius: 24, padding: '28px 20px', boxShadow: '0 20px 40px rgba(0,0,0,0.4)', textAlign: 'center', boxSizing: 'border-box' }}>
+      <div style={{ minHeight: '100vh', background: '#0b0f19', color: '#f8fafc', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', padding: '36px 16px', fontFamily: 'system-ui, -apple-system, sans-serif', boxSizing: 'border-box' }}>
+        
+        {/* Main Check-In Card */}
+        <div style={{ width: '100%', maxWidth: 480, background: '#131b2e', border: '1px solid #1e293b', borderRadius: 24, padding: '28px 22px', boxShadow: '0 20px 40px rgba(0,0,0,0.5)', textAlign: 'center', boxSizing: 'border-box' }}>
           
           {/* Student Header */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, boxShadow: '0 2px 10px rgba(16, 185, 129, 0.2)' }}>
                 🎓
               </div>
               <div style={{ textAlign: 'left' }}>
-                <div style={{ fontWeight: 700, fontSize: 16, color: '#f8fafc' }}>PRAVAHAx Attendance</div>
-                <div style={{ fontSize: 12, color: '#94a3b8' }}>Student Check-In</div>
+                <div style={{ fontWeight: 800, fontSize: 17, color: '#f8fafc', letterSpacing: '-0.3px' }}>PRAVAHAx Attendance</div>
+                <div style={{ fontSize: 12, color: '#94a3b8' }}>Student Passwordless Check-In</div>
               </div>
             </div>
 
             <button
               onClick={() => navigate('/')}
-              style={{ background: 'transparent', border: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer' }}
+              style={{ background: '#0b0f19', border: '1px solid #334155', color: '#94a3b8', padding: '5px 12px', borderRadius: 8, fontSize: 12, cursor: 'pointer', fontWeight: 600 }}
             >
               Home
             </button>
           </div>
 
+          {/* Active Lecture Status Banner */}
+          {activeLectureInfo?.active ? (
+            <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 18, display: 'flex', alignItems: 'center', justifyContent: 'space-between', textAlign: 'left' }}>
+              <div>
+                <div style={{ fontSize: 11, color: '#34d399', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 8px #10b981' }} />
+                  Session Active
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#f8fafc', marginTop: 2 }}>{activeLectureInfo.className}</div>
+              </div>
+              <span style={{ fontSize: 11, padding: '4px 8px', borderRadius: 6, background: activeLectureInfo.mode === 'DYNAMIC_QR' ? '#2563eb' : '#059669', color: '#fff', fontWeight: 700 }}>
+                {activeLectureInfo.mode === 'DYNAMIC_QR' ? '⚡ Dynamic QR' : '🔢 Code Mode'}
+              </span>
+            </div>
+          ) : (
+            <div style={{ background: 'rgba(234, 179, 8, 0.08)', border: '1px solid rgba(234, 179, 8, 0.25)', borderRadius: 12, padding: '8px 12px', marginBottom: 18, fontSize: 12, color: '#fbbf24', textAlign: 'left' }}>
+              ⏸ Waiting for teacher to initiate attendance session...
+            </div>
+          )}
+
           {/* Success Screen */}
           {studentSuccess ? (
             <div style={{ padding: '24px 16px', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: 20 }}>
-              <div style={{ width: 60, height: 60, borderRadius: '50%', background: '#10b981', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32, margin: '0 auto 16px', boxShadow: '0 8px 20px rgba(16, 185, 129, 0.3)' }}>
+              <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#10b981', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34, margin: '0 auto 16px', boxShadow: '0 8px 24px rgba(16, 185, 129, 0.35)' }}>
                 ✓
               </div>
-              <h2 style={{ margin: '0 0 6px', fontSize: 22, color: '#34d399', fontWeight: 800 }}>Attendance Marked</h2>
+              <h2 style={{ margin: '0 0 6px', fontSize: 22, color: '#34d399', fontWeight: 800 }}>Attendance Marked!</h2>
               <p style={{ margin: '0 0 16px', fontSize: 13, color: '#94a3b8' }}>
-                Your attendance has been recorded successfully.
+                Your institutional record has been securely confirmed.
               </p>
 
               <div style={{ background: '#0b0f19', border: '1px solid #1e293b', borderRadius: 12, padding: 14, textAlign: 'left', fontSize: 13, color: '#cbd5e1', marginBottom: 20 }}>
+                {resolvedStudentName && (
+                  <div style={{ marginBottom: 6 }}><strong style={{ color: '#94a3b8' }}>Student:</strong> <span style={{ color: '#f8fafc', fontWeight: 700 }}>{resolvedStudentName}</span> ({enrollmentInput})</div>
+                )}
                 <div style={{ marginBottom: 6 }}><strong style={{ color: '#94a3b8' }}>Course:</strong> {studentSuccess.class_name} ({studentSuccess.subject})</div>
                 <div style={{ marginBottom: 6 }}><strong style={{ color: '#94a3b8' }}>Time:</strong> {studentSuccess.time}</div>
-                <div><strong style={{ color: '#94a3b8' }}>Method:</strong> <span style={{ color: '#34d399' }}>{studentSuccess.method} Verified</span></div>
+                <div><strong style={{ color: '#94a3b8' }}>Method:</strong> <span style={{ color: '#34d399', fontWeight: 600 }}>{studentSuccess.method} Verified</span></div>
               </div>
 
               <button
@@ -992,41 +1152,88 @@ function App() {
                   setStudentError('');
                   setIsScanningLocked(false);
                 }}
-                style={{ width: '100%', padding: '12px 16px', background: '#059669', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: 'pointer' }}
+                style={{ width: '100%', padding: '12px 16px', background: '#059669', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: 'pointer', boxShadow: '0 4px 14px rgba(5, 150, 105, 0.4)' }}
               >
                 Done
               </button>
             </div>
           ) : (
             <>
-              {/* Step 1: Enrollment Number Input */}
+              {/* Step 1: 30-Student Quick Select & Input */}
               <div style={{ textAlign: 'left', marginBottom: 18 }}>
-                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#cbd5e1', marginBottom: 6 }}>
-                  Enrollment Number
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#cbd5e1', marginBottom: 6 }}>
+                  Student Institutional ID (Passwordless)
                 </label>
+
+                {/* Dropdown with 30 Registered Dummy Students */}
+                <select
+                  value={enrollmentInput}
+                  onChange={(e) => setEnrollmentInput(e.target.value)}
+                  style={{ width: '100%', padding: '11px 12px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 14, fontWeight: 600, outline: 'none', marginBottom: 10, boxSizing: 'border-box' }}
+                >
+                  <option value="">-- Quick Select from 30 Registered Students --</option>
+                  {STUDENT_ROSTER_LIST.map((s) => (
+                    <option key={s.enrollment} value={s.enrollment}>
+                      {s.enrollment} — {s.name}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Quick 1-Tap Chips */}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                  {STUDENT_ROSTER_LIST.slice(0, 5).map((s) => (
+                    <button
+                      key={s.enrollment}
+                      type="button"
+                      onClick={() => setEnrollmentInput(s.enrollment)}
+                      style={{
+                        padding: '4px 9px',
+                        borderRadius: 6,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        border: enrollmentInput === s.enrollment ? '1px solid #3b82f6' : '1px solid #1e293b',
+                        background: enrollmentInput === s.enrollment ? 'rgba(59, 130, 246, 0.25)' : '#0b0f19',
+                        color: enrollmentInput === s.enrollment ? '#60a5fa' : '#94a3b8'
+                      }}
+                    >
+                      {s.enrollment} ({s.name.split(' ')[0]})
+                    </button>
+                  ))}
+                </div>
+
+                {/* Manual Textbox (Supports STU001, STUD002, s1 etc.) */}
                 <input 
                   type="text"
-                  placeholder="e.g. STU001"
+                  placeholder="e.g. STU001 or STUD002"
                   value={enrollmentInput}
                   onChange={(e) => setEnrollmentInput(e.target.value.toUpperCase())}
-                  style={{ width: '100%', padding: '12px 14px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 15, fontWeight: 600, outline: 'none', boxSizing: 'border-box' }}
+                  style={{ width: '100%', padding: '12px 14px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 15, fontWeight: 700, outline: 'none', boxSizing: 'border-box' }}
                 />
-                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
-                  No password required. Institutional ID identifies your record.
-                </div>
+
+                {/* Detected Student Identity Badge */}
+                {resolvedStudentName ? (
+                  <div style={{ marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 6, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: 12, fontWeight: 700 }}>
+                    <span>✓ Identified Student:</span> <span>{resolvedStudentName}</span>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                    No password required. Institutional enrollment number identifies your attendance record.
+                  </div>
+                )}
               </div>
 
               {/* Mode Selector Tabs */}
               <div style={{ display: 'flex', background: '#0b0f19', padding: 4, borderRadius: 12, marginBottom: 16, border: '1px solid #1e293b' }}>
                 <button
                   onClick={() => { setStudentModeTab('DYNAMIC_QR'); setStudentError(''); }}
-                  style={{ flex: 1, padding: '9px 0', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600, fontSize: 13, background: studentModeTab === 'DYNAMIC_QR' ? '#2563eb' : 'transparent', color: studentModeTab === 'DYNAMIC_QR' ? '#ffffff' : '#94a3b8', transition: 'all 0.2s' }}
+                  style={{ flex: 1, padding: '10px 0', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13, background: studentModeTab === 'DYNAMIC_QR' ? '#2563eb' : 'transparent', color: studentModeTab === 'DYNAMIC_QR' ? '#ffffff' : '#94a3b8', transition: 'all 0.2s' }}
                 >
                   ⚡ Scan QR
                 </button>
                 <button
                   onClick={() => { setStudentModeTab('CODE'); setStudentError(''); }}
-                  style={{ flex: 1, padding: '9px 0', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600, fontSize: 13, background: studentModeTab === 'CODE' ? '#059669' : 'transparent', color: studentModeTab === 'CODE' ? '#ffffff' : '#94a3b8', transition: 'all 0.2s' }}
+                  style={{ flex: 1, padding: '10px 0', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13, background: studentModeTab === 'CODE' ? '#059669' : 'transparent', color: studentModeTab === 'CODE' ? '#ffffff' : '#94a3b8', transition: 'all 0.2s' }}
                 >
                   🔢 Enter Code
                 </button>
@@ -1038,7 +1245,7 @@ function App() {
                   /* Dynamic QR Scan Flow */
                   <div>
                     <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 12 }}>
-                      Align camera with the rotating QR code on teacher's screen:
+                      Align camera with the rotating Dynamic QR code on teacher's screen:
                     </div>
 
                     <QrScanner
@@ -1093,9 +1300,9 @@ function App() {
                     <button
                       onClick={handleStudentSubmitCode}
                       disabled={verifyingAttendance}
-                      style={{ display: 'block', width: '100%', marginTop: 16, padding: '12px 16px', background: '#059669', color: '#fff', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: verifyingAttendance ? 'not-allowed' : 'pointer' }}
+                      style={{ display: 'block', width: '100%', marginTop: 16, padding: '12px 16px', background: '#059669', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: verifyingAttendance ? 'not-allowed' : 'pointer', boxShadow: '0 4px 14px rgba(5, 150, 105, 0.4)' }}
                     >
-                      {verifyingAttendance ? 'Verifying...' : 'Mark Attendance'}
+                      {verifyingAttendance ? 'Verifying Attendance...' : 'Mark Attendance'}
                     </button>
                   </div>
                 )}
@@ -1104,7 +1311,7 @@ function App() {
               {/* Status or Error Banner */}
               {verifyingAttendance && (
                 <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 10, background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', color: '#60a5fa', fontSize: 13 }}>
-                  Verifying attendance with server...
+                  Verifying attendance record with server...
                 </div>
               )}
 
@@ -1124,6 +1331,69 @@ function App() {
             </>
           )}
         </div>
+
+        {/* DOWN-SIDE: Live Classroom Attendance Activity Stream */}
+        <div style={{ width: '100%', maxWidth: 480, marginTop: 24, background: '#131b2e', border: '1px solid #1e293b', borderRadius: 20, padding: '20px 18px', textAlign: 'left', boxShadow: '0 10px 30px rgba(0,0,0,0.3)', boxSizing: 'border-box' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 10px #10b981' }} />
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: '#f8fafc' }}>
+                Classroom Attendance Log
+              </h3>
+            </div>
+            <span style={{ fontSize: 11, color: '#34d399', fontWeight: 600 }}>
+              {studentRecentLogs.length} Checked In
+            </span>
+          </div>
+
+          {studentRecentLogs && studentRecentLogs.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 260, overflowY: 'auto' }}>
+              {studentRecentLogs.map((log: any, idx: number) => {
+                const cleanInput = enrollmentInput.trim().toUpperCase().replace('STUD', 'STU');
+                const isMe = (log.enrollment_number === cleanInput) ||
+                             (log.enrollment_number === enrollmentInput.trim().toUpperCase());
+                return (
+                  <div
+                    key={idx}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      background: isMe ? 'rgba(16, 185, 129, 0.14)' : '#0b0f19',
+                      border: isMe ? '1px solid #10b981' : '1px solid #1e293b',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: isMe ? '#34d399' : '#f8fafc', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {log.name || log.student_id}
+                        {isMe && (
+                          <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#10b981', color: '#fff', fontWeight: 800 }}>
+                            YOU
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                        ID: {log.enrollment_number} • {new Date(log.marked_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#34d399' }}>✓ Present</div>
+                      <div style={{ fontSize: 10, color: '#60a5fa' }}>{log.verification_method || 'Verified'}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ padding: '24px 12px', textAlign: 'center', color: '#64748b', fontSize: 13, background: '#0b0f19', borderRadius: 12, border: '1px dashed #1e293b' }}>
+              No check-ins recorded yet for this session. Enter the code or scan QR above to be first!
+            </div>
+          )}
+        </div>
+
       </div>
     );
   }

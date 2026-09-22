@@ -448,8 +448,13 @@ app.post('/api/session/stop', teacherAuthMiddleware, (req, res) => {
 
 // Unified Attendance Verification Engine (Dynamic QR & Attendance Code)
 app.post('/api/attendance/mark', (req, res) => {
-  const { enrollment_number, student_id, pin, qr_token, device_id } = req.body;
-  const studentIdentifier = (enrollment_number || student_id || '').trim();
+  const { enrollment_number, student_id, pin, qr_token, device_id } = req.body || {};
+  const rawIdentifier = (enrollment_number || student_id || '').trim();
+  // Support both STU and STUD prefix as well as case insensitivity
+  let studentIdentifier = rawIdentifier.toUpperCase();
+  if (studentIdentifier.startsWith('STUD') && !studentIdentifier.startsWith('STUDENT')) {
+    studentIdentifier = studentIdentifier.replace('STUD', 'STU');
+  }
 
   // 1. Enrollment Number Identification
   if (!studentIdentifier) {
@@ -477,8 +482,8 @@ app.post('/api/attendance/mark', (req, res) => {
 
   // 4. Verify Student Record (Passwordless via Enrollment Number / ID)
   db.get(
-    "SELECT id, name, email, role, student_id FROM users WHERE (student_id = ? OR id = ?) AND role = 'STUDENT'",
-    [studentIdentifier, studentIdentifier],
+    "SELECT id, name, email, role, student_id FROM users WHERE (UPPER(student_id) = ? OR UPPER(id) = ? OR UPPER(student_id) = ?) AND role = 'STUDENT'",
+    [studentIdentifier, studentIdentifier, rawIdentifier.toUpperCase()],
     (err, user: any) => {
       if (err || !user) {
         return res.status(404).json({ error: 'Student record not found or not enrolled' });
