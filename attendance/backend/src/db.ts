@@ -1,6 +1,15 @@
 import sqlite3 from 'sqlite3';
 import path from 'path';
+import { Pool } from 'pg';
 import { hashPassword } from './auth';
+
+// PostgreSQL Connection Pool (used if DATABASE_URL or PG environment is configured)
+export const pgPool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined
+    })
+  : null;
 
 const dbPath = path.resolve(__dirname, 'attendance.db');
 const db = new sqlite3.Database(dbPath);
@@ -96,6 +105,7 @@ export const initDB = () => {
 
     // Seed initial teacher and student data
     const defaultTeacherPassword = hashPassword('teacher123');
+    const defaultStudentPassword = hashPassword('pravaha@123');
 
     db.get("SELECT id, password_hash FROM users WHERE email = 'teacher@test.com'", (err, row: any) => {
       if (!row) {
@@ -103,50 +113,54 @@ export const initDB = () => {
           `INSERT INTO users (id, name, email, role, password_hash) VALUES ('t1', 'Prof. Sharma', 'teacher@test.com', 'TEACHER', ?)`,
           [defaultTeacherPassword]
         );
-
-        const students30 = [
-          ['s1', 'Rahul Patil', 'student1@test.com', 'STU001'],
-          ['s2', 'Sneha Shah', 'student2@test.com', 'STU002'],
-          ['s3', 'Aman Verma', 'student3@test.com', 'STU003'],
-          ['s4', 'Priya Sharma', 'student4@test.com', 'STU004'],
-          ['s5', 'Rohan Mehta', 'student5@test.com', 'STU005'],
-          ['s6', 'Ananya Desai', 'student6@test.com', 'STU006'],
-          ['s7', 'Aditya Joshi', 'student7@test.com', 'STU007'],
-          ['s8', 'Kavya Reddy', 'student8@test.com', 'STU008'],
-          ['s9', 'Siddharth Malhotra', 'student9@test.com', 'STU009'],
-          ['s10', 'Riya Sen', 'student10@test.com', 'STU010'],
-          ['s11', 'Aryan Gupta', 'student11@test.com', 'STU011'],
-          ['s12', 'Tanvi Kulkarni', 'student12@test.com', 'STU012'],
-          ['s13', 'Varun Nair', 'student13@test.com', 'STU013'],
-          ['s14', 'Pooja Iyer', 'student14@test.com', 'STU014'],
-          ['s15', 'Harsh Pandey', 'student15@test.com', 'STU015'],
-          ['s16', 'Neha Choudhary', 'student16@test.com', 'STU016'],
-          ['s17', 'Yash Singhania', 'student17@test.com', 'STU017'],
-          ['s18', 'Divya Bhat', 'student18@test.com', 'STU018'],
-          ['s19', 'Kunal Agrawal', 'student19@test.com', 'STU019'],
-          ['s20', 'Shreya Kapoor', 'student20@test.com', 'STU020'],
-          ['s21', 'Gaurav Mishra', 'student21@test.com', 'STU021'],
-          ['s22', 'Meera Pillai', 'student22@test.com', 'STU022'],
-          ['s23', 'Nikhil Saxena', 'student23@test.com', 'STU023'],
-          ['s24', 'Isha Jain', 'student24@test.com', 'STU024'],
-          ['s25', 'Pranav Rao', 'student25@test.com', 'STU025'],
-          ['s26', 'Swati Tiwari', 'student26@test.com', 'STU026'],
-          ['s27', 'Vivek Chauhan', 'student27@test.com', 'STU027'],
-          ['s28', 'Ritu Chawla', 'student28@test.com', 'STU028'],
-          ['s29', 'Manan Bhatt', 'student29@test.com', 'STU029'],
-          ['s30', 'Kriti Roy', 'student30@test.com', 'STU030']
-        ];
-
-        students30.forEach(([sid, sname, semail, senr]) => {
-          db.run(`INSERT OR IGNORE INTO users (id, name, email, role, student_id) VALUES (?, ?, ?, 'STUDENT', ?)`, [sid, sname, semail, senr]);
-        });
-        
         db.run(`INSERT INTO classes (id, name, course, teacher_id) VALUES ('c1', 'Data Structures', 'CS101', 't1')`);
         db.run(`INSERT INTO classes (id, name, course, teacher_id) VALUES ('c2', 'Computer Networks', 'CS102', 't1')`);
-      } else if (!row.password_hash) {
-        // Upgrade existing teacher record with secure password hash
+      } else {
         db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [defaultTeacherPassword, row.id]);
       }
+
+      // 30 Students Roster (Featuring 5 primary student logins: Chetan, Dhruv, Pallav, Varad, Devang)
+      const students30 = [
+        ['s1', 'Chetan Agrawal', 'chetan@pravaha.com', 'STU001'],
+        ['s2', 'Dhruv Sharma', 'dhruv@pravaha.com', 'STU002'],
+        ['s3', 'Pallav Patel', 'pallav@pravaha.com', 'STU003'],
+        ['s4', 'Varad Kulkarni', 'varad@pravaha.com', 'STU004'],
+        ['s5', 'Devang Joshi', 'devang@pravaha.com', 'STU005'],
+        ['s6', 'Ananya Desai', 'ananya@pravaha.com', 'STU006'],
+        ['s7', 'Aditya Joshi', 'aditya@pravaha.com', 'STU007'],
+        ['s8', 'Kavya Reddy', 'kavya@pravaha.com', 'STU008'],
+        ['s9', 'Siddharth Malhotra', 'siddharth@pravaha.com', 'STU009'],
+        ['s10', 'Riya Sen', 'riya@pravaha.com', 'STU010'],
+        ['s11', 'Aryan Gupta', 'aryan@pravaha.com', 'STU011'],
+        ['s12', 'Tanvi Kulkarni', 'tanvi@pravaha.com', 'STU012'],
+        ['s13', 'Varun Nair', 'varun@pravaha.com', 'STU013'],
+        ['s14', 'Pooja Iyer', 'pooja@pravaha.com', 'STU014'],
+        ['s15', 'Harsh Pandey', 'harsh@pravaha.com', 'STU015'],
+        ['s16', 'Neha Choudhary', 'neha@pravaha.com', 'STU016'],
+        ['s17', 'Yash Singhania', 'yash@pravaha.com', 'STU017'],
+        ['s18', 'Divya Bhat', 'divya@pravaha.com', 'STU018'],
+        ['s19', 'Kunal Agrawal', 'kunal@pravaha.com', 'STU019'],
+        ['s20', 'Shreya Kapoor', 'shreya@pravaha.com', 'STU020'],
+        ['s21', 'Gaurav Mishra', 'gaurav@pravaha.com', 'STU021'],
+        ['s22', 'Meera Pillai', 'meera@pravaha.com', 'STU022'],
+        ['s23', 'Nikhil Saxena', 'nikhil@pravaha.com', 'STU023'],
+        ['s24', 'Isha Jain', 'isha@pravaha.com', 'STU024'],
+        ['s25', 'Pranav Rao', 'pranav@pravaha.com', 'STU025'],
+        ['s26', 'Swati Tiwari', 'swati@pravaha.com', 'STU026'],
+        ['s27', 'Vivek Chauhan', 'vivek@pravaha.com', 'STU027'],
+        ['s28', 'Ritu Chawla', 'ritu@pravaha.com', 'STU028'],
+        ['s29', 'Manan Bhatt', 'manan@pravaha.com', 'STU029'],
+        ['s30', 'Kriti Roy', 'kriti@pravaha.com', 'STU030']
+      ];
+
+      students30.forEach(([sid, sname, semail, senr]) => {
+        db.run(
+          `INSERT INTO users (id, name, email, role, student_id, password_hash)
+           VALUES (?, ?, ?, 'STUDENT', ?, ?)
+           ON CONFLICT(id) DO UPDATE SET name = excluded.name, email = excluded.email, password_hash = excluded.password_hash, student_id = excluded.student_id`,
+          [sid, sname, semail, senr, defaultStudentPassword]
+        );
+      });
     });
   });
 };

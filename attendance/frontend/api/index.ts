@@ -35,13 +35,13 @@ const QR_SIGNING_SECRET = process.env.QR_SIGNING_SECRET || 'pravahax-qr-signing-
 const QR_ROTATION_INTERVAL = 4;
 const QR_EXPIRATION_GRACE = 4;
 
-// 30 Student Roster
+// 30 Student Roster (with 5 primary student logins: Chetan, Dhruv, Pallav, Varad, Devang)
 export const STUDENT_ROSTER_LIST = [
-  { enrollment: 'STU001', name: 'Rahul Patil' },
-  { enrollment: 'STU002', name: 'Sneha Shah' },
-  { enrollment: 'STU003', name: 'Aman Verma' },
-  { enrollment: 'STU004', name: 'Priya Sharma' },
-  { enrollment: 'STU005', name: 'Rohan Mehta' },
+  { enrollment: 'STU001', name: 'Chetan Agrawal', username: 'chetan', email: 'chetan@pravaha.com' },
+  { enrollment: 'STU002', name: 'Dhruv Sharma', username: 'dhruv', email: 'dhruv@pravaha.com' },
+  { enrollment: 'STU003', name: 'Pallav Patel', username: 'pallav', email: 'pallav@pravaha.com' },
+  { enrollment: 'STU004', name: 'Varad Kulkarni', username: 'varad', email: 'varad@pravaha.com' },
+  { enrollment: 'STU005', name: 'Devang Joshi', username: 'devang', email: 'devang@pravaha.com' },
   { enrollment: 'STU006', name: 'Ananya Desai' },
   { enrollment: 'STU007', name: 'Aditya Joshi' },
   { enrollment: 'STU008', name: 'Kavya Reddy' },
@@ -73,7 +73,8 @@ const studentRoster: Record<string, string> = {};
 STUDENT_ROSTER_LIST.forEach((s, idx) => {
   studentRoster[s.enrollment] = s.name;
   studentRoster[`s${idx + 1}`] = s.name;
-  // Also support STUD prefix (e.g. STUD002 -> Sneha Shah)
+  if ((s as any).username) studentRoster[(s as any).username] = s.name;
+  // Also support STUD prefix (e.g. STUD002 -> Sneha Shah/Dhruv)
   const studKey = s.enrollment.replace('STU', 'STUD');
   studentRoster[studKey] = s.name;
 });
@@ -203,6 +204,54 @@ export default async function handler(req: any, res: any) {
   // 2. Teacher Logout
   if (pathname === '/api/teacher/logout') {
     return res.status(200).json({ success: true, message: 'Logged out successfully' });
+  }
+
+  // 2.5 Student Login (Supports Chetan, Dhruv, Pallav, Varad, Devang with password pravaha@123)
+  if (pathname === '/api/student/login') {
+    const { identifier, email, student_id, password } = body;
+    const searchId = (identifier || email || student_id || '').trim().toLowerCase();
+    const inputPassword = (password || '').trim();
+
+    if (!searchId || !inputPassword) {
+      return res.status(400).json({ error: 'Student username/ID and password are required' });
+    }
+
+    if (inputPassword !== 'pravaha@123') {
+      return res.status(401).json({ error: 'Invalid password. Please use pravaha@123' });
+    }
+
+    const matched = STUDENT_ROSTER_LIST.find(s => 
+      s.enrollment.toLowerCase() === searchId ||
+      s.name.toLowerCase() === searchId ||
+      (s as any).username?.toLowerCase() === searchId ||
+      (s as any).email?.toLowerCase() === searchId ||
+      s.enrollment.toLowerCase() === searchId.replace('stud', 'stu')
+    ) || {
+      enrollment: searchId.toUpperCase(),
+      name: searchId.charAt(0).toUpperCase() + searchId.slice(1),
+      email: `${searchId}@pravaha.com`
+    };
+
+    const token = signSimpleToken({
+      id: matched.enrollment,
+      name: matched.name,
+      email: (matched as any).email || `${matched.name.toLowerCase()}@pravaha.com`,
+      role: 'STUDENT',
+      student_id: matched.enrollment,
+      exp: Math.floor(Date.now() / 1000) + 8 * 3600
+    });
+
+    return res.status(200).json({
+      success: true,
+      user: {
+        id: matched.enrollment,
+        name: matched.name,
+        email: (matched as any).email || `${matched.name.toLowerCase()}@pravaha.com`,
+        role: 'STUDENT',
+        student_id: matched.enrollment
+      },
+      token
+    });
   }
 
   // 3. Teacher Profile

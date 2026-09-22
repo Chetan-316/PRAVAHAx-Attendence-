@@ -14,64 +14,71 @@ export const QrScanner: React.FC<QrScannerProps> = ({ onScanSuccess, isScanningL
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const scannerElementId = 'qr-reader-container';
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const initScanner = async () => {
-      try {
-        setCameraError(null);
-        
-        // Query available video devices
-        const devices = await Html5Qrcode.getCameras().catch(() => []);
-        if (isMounted && devices && devices.length > 0) {
-          setCameras(devices);
-        }
-
-        const html5QrCode = new Html5Qrcode(scannerElementId);
-        scannerRef.current = html5QrCode;
-
-        const cameraConfig = devices && devices.length > 0 
-          ? { deviceId: { exact: devices[0].id } }
-          : { facingMode: 'environment' };
-
-        await html5QrCode.start(
-          cameraConfig,
-          {
-            fps: 15,
-            qrbox: (viewfinderWidth, viewfinderHeight) => {
-              const edge = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.75);
-              return { width: edge, height: edge };
-            },
-            aspectRatio: 1.0
-          },
-          (decodedText) => {
-            if (!isScanningLocked) {
-              onScanSuccess(decodedText);
-            }
-          },
-          () => {}
+  const initScanner = async () => {
+    try {
+      setCameraError(null);
+      
+      // Query available video devices
+      const devices = await Html5Qrcode.getCameras().catch(() => []);
+      let chosenIndex = 0;
+      if (devices && devices.length > 0) {
+        setCameras(devices);
+        // Automatically prefer the rear/environment camera on phones
+        const rearIdx = devices.findIndex((d: any) => 
+          d.label?.toLowerCase().includes('back') || 
+          d.label?.toLowerCase().includes('rear') ||
+          d.label?.toLowerCase().includes('environment')
         );
-
-        if (isMounted) {
-          setCameraStarted(true);
-        }
-      } catch (err: any) {
-        if (!isMounted) return;
-        console.warn('Camera start error:', err);
-        if (err?.name === 'NotAllowedError' || err?.message?.includes('Permission')) {
-          setCameraError('Camera permission denied. Please enable camera permissions in your browser settings.');
-        } else if (err?.name === 'NotFoundError' || err?.message?.includes('devices')) {
-          setCameraError('No camera detected on this device.');
-        } else {
-          setCameraError(err?.message || 'Unable to access camera.');
-        }
+        if (rearIdx !== -1) chosenIndex = rearIdx;
+        setCurrentCameraIndex(chosenIndex);
       }
-    };
 
+      if (scannerRef.current && scannerRef.current.isScanning) {
+        await scannerRef.current.stop().catch(() => {});
+      }
+
+      const html5QrCode = new Html5Qrcode(scannerElementId);
+      scannerRef.current = html5QrCode;
+
+      const cameraConfig = devices && devices.length > 0 
+        ? { deviceId: { exact: devices[chosenIndex].id } }
+        : { facingMode: 'environment' };
+
+      await html5QrCode.start(
+        cameraConfig,
+        {
+          fps: 15,
+          qrbox: (viewfinderWidth, viewfinderHeight) => {
+            const edge = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.75);
+            return { width: edge, height: edge };
+          },
+          aspectRatio: 1.0
+        },
+        (decodedText) => {
+          if (!isScanningLocked) {
+            onScanSuccess(decodedText);
+          }
+        },
+        () => {}
+      );
+
+      setCameraStarted(true);
+    } catch (err: any) {
+      console.warn('Camera start error:', err);
+      if (err?.name === 'NotAllowedError' || err?.message?.includes('Permission') || err?.name === 'PermissionDeniedError') {
+        setCameraError('Camera permission denied. Please allow camera access in your browser address bar settings.');
+      } else if (err?.name === 'NotFoundError' || err?.message?.includes('devices')) {
+        setCameraError('No camera detected on this device. You can still use the manual token fallback below.');
+      } else {
+        setCameraError(err?.message || 'Unable to access camera. Please check camera permissions.');
+      }
+    }
+  };
+
+  useEffect(() => {
     initScanner();
 
     return () => {
-      isMounted = false;
       if (scannerRef.current && scannerRef.current.isScanning) {
         scannerRef.current.stop().catch((e) => console.warn('Scanner stop error', e));
       }
@@ -233,15 +240,38 @@ export const QrScanner: React.FC<QrScannerProps> = ({ onScanSuccess, isScanningL
         <div style={{ 
           margin: '12px auto 0', 
           maxWidth: 290, 
-          padding: 12, 
-          background: '#fee2e2', 
-          color: '#991b1b', 
-          borderRadius: 10, 
-          fontSize: 13,
-          textAlign: 'left',
-          border: '1px solid #fca5a5'
+          padding: 14, 
+          background: 'rgba(239, 68, 68, 0.12)', 
+          color: '#fca5a5', 
+          borderRadius: 14, 
+          fontSize: 13, 
+          textAlign: 'left', 
+          border: '1px solid rgba(239, 68, 68, 0.3)' 
         }}>
-          <strong>Camera Notice:</strong> {cameraError}
+          <div style={{ fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>📷</span> Camera Notice
+          </div>
+          <div style={{ fontSize: 12, color: '#e2e8f0', marginBottom: 10, lineHeight: 1.4 }}>
+            {cameraError}
+          </div>
+          <button
+            onClick={initScanner}
+            style={{
+              padding: '6px 12px',
+              background: '#2563eb',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: 8,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6
+            }}
+          >
+            🔄 Retry Camera Permission
+          </button>
         </div>
       )}
     </div>

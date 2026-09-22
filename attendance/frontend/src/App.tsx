@@ -31,13 +31,13 @@ export interface AttendanceSuccessData {
   message: string;
 }
 
-// 30 Student Registered Roster (Passwordless institutional accounts)
+// 30 Student Registered Roster (Featuring 5 primary student logins: Chetan, Dhruv, Pallav, Varad, Devang)
 export const STUDENT_ROSTER_LIST = [
-  { enrollment: 'STU001', name: 'Rahul Patil' },
-  { enrollment: 'STU002', name: 'Sneha Shah' },
-  { enrollment: 'STU003', name: 'Aman Verma' },
-  { enrollment: 'STU004', name: 'Priya Sharma' },
-  { enrollment: 'STU005', name: 'Rohan Mehta' },
+  { enrollment: 'STU001', name: 'Chetan', username: 'chetan', email: 'chetan@pravaha.com' },
+  { enrollment: 'STU002', name: 'Dhruv', username: 'dhruv', email: 'dhruv@pravaha.com' },
+  { enrollment: 'STU003', name: 'Pallav', username: 'pallav', email: 'pallav@pravaha.com' },
+  { enrollment: 'STU004', name: 'Varad', username: 'varad', email: 'varad@pravaha.com' },
+  { enrollment: 'STU005', name: 'Devang', username: 'devang', email: 'devang@pravaha.com' },
   { enrollment: 'STU006', name: 'Ananya Desai' },
   { enrollment: 'STU007', name: 'Aditya Joshi' },
   { enrollment: 'STU008', name: 'Kavya Reddy' },
@@ -70,13 +70,32 @@ export const getResolvedStudentName = (rawInput: string) => {
   if (clean.startsWith('STUD') && !clean.startsWith('STUDENT')) {
     clean = clean.replace('STUD', 'STU');
   }
-  const match = STUDENT_ROSTER_LIST.find(s => s.enrollment === clean || s.enrollment === rawInput.trim().toUpperCase());
+  const match = STUDENT_ROSTER_LIST.find(s => 
+    s.enrollment === clean || 
+    s.enrollment === rawInput.trim().toUpperCase() ||
+    s.name.toLowerCase() === rawInput.trim().toLowerCase() ||
+    (s as any).username?.toLowerCase() === rawInput.trim().toLowerCase()
+  );
   return match ? match.name : '';
 };
 
 function App() {
-  // Navigation Route State ('/' | '/teacher/login' | '/teacher' | '/student')
+  // Navigation Route State ('/' | '/teacher/login' | '/teacher' | '/student' | '/student/login')
   const [currentPath, setCurrentPath] = useState<string>(window.location.pathname || '/');
+
+  // Starting Page Dual Tab State ('FACULTY' | 'STUDENT')
+  const [startTab, setStartTab] = useState<'FACULTY' | 'STUDENT'>('FACULTY');
+
+  // Student Authentication State
+  const [studentToken, setStudentToken] = useState<string>(() => localStorage.getItem('pravahax_student_token') || '');
+  const [studentUser, setStudentUser] = useState<any>(() => {
+    const saved = localStorage.getItem('pravahax_student_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [studentIdentifier, setStudentIdentifier] = useState('chetan');
+  const [studentPassword, setStudentPassword] = useState('pravaha@123');
+  const [studentLoginLoading, setStudentLoginLoading] = useState(false);
+  const [studentLoginError, setStudentLoginError] = useState('');
 
   // Teacher Authentication State
   const [teacherToken, setTeacherToken] = useState<string>(() => localStorage.getItem('pravahax_teacher_token') || '');
@@ -109,7 +128,6 @@ function App() {
 
   // Student State
   const [enrollmentInput, setEnrollmentInput] = useState(() => localStorage.getItem('pravahax_student_enrollment') || '');
-  const [studentModeTab, setStudentModeTab] = useState<AttendanceMode>('DYNAMIC_QR');
   const [studentPinInput, setStudentPinInput] = useState('');
   const [isScanningLocked, setIsScanningLocked] = useState(false);
   const [verifyingAttendance, setVerifyingAttendance] = useState(false);
@@ -199,7 +217,57 @@ function App() {
     setTeacherToken('');
     setTeacherUser(null);
     setSessionActive(false);
-    navigate('/teacher/login');
+    navigate('/');
+  };
+
+  // ==========================================
+  // STUDENT AUTHENTICATION FLOW
+  // ==========================================
+  const handleStudentLogin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setStudentLoginError('');
+
+    if (!studentIdentifier.trim() || !studentPassword.trim()) {
+      setStudentLoginError('Student username/ID and password are required.');
+      return;
+    }
+
+    setStudentLoginLoading(true);
+    try {
+      const res = await fetch('/api/student/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: studentIdentifier.trim(),
+          password: studentPassword.trim()
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.token) {
+        localStorage.setItem('pravahax_student_token', data.token);
+        localStorage.setItem('pravahax_student_user', JSON.stringify(data.user));
+        setStudentToken(data.token);
+        setStudentUser(data.user);
+        setEnrollmentInput(data.user.student_id || data.user.id || studentIdentifier.trim().toUpperCase());
+        setStudentPassword('pravaha@123');
+        navigate('/student');
+      } else {
+        setStudentLoginError(data.error || 'Invalid student credentials. Password must be pravaha@123');
+      }
+    } catch {
+      setStudentLoginError('Unable to connect to authentication server. Please try again.');
+    } finally {
+      setStudentLoginLoading(false);
+    }
+  };
+
+  const handleStudentLogout = () => {
+    localStorage.removeItem('pravahax_student_token');
+    localStorage.removeItem('pravahax_student_user');
+    setStudentToken('');
+    setStudentUser(null);
+    navigate('/');
   };
 
   // Reconnect recovery: restore active session on page refresh
@@ -638,139 +706,271 @@ function App() {
   // ROUTING & VIEW RENDERING
   // ==========================================
 
-  // 1. LANDING PAGE ( / )
-  if (currentPath === '/') {
-    return (
-      <div style={{ minHeight: '100vh', background: '#0b0f19', color: '#f8fafc', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px 16px', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-        <div style={{ maxWidth: 640, width: '100%', textAlign: 'center' }}>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 30, background: 'rgba(59, 130, 246, 0.12)', border: '1px solid rgba(59, 130, 246, 0.3)', color: '#60a5fa', fontSize: 13, fontWeight: 600, marginBottom: 20 }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#3b82f6' }} />
-            PRAVAHAx ERP System
-          </div>
-          <h1 style={{ fontSize: '2.5rem', fontWeight: 800, margin: '0 0 12px', letterSpacing: '-0.03em', background: 'linear-gradient(135deg, #ffffff 40%, #94a3b8 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-            PRAVAHAx Attendance
-          </h1>
-          <p style={{ fontSize: '1.1rem', color: '#94a3b8', margin: '0 auto 36px', maxWidth: 480, lineHeight: 1.5 }}>
-            Mark and manage classroom attendance securely with Dynamic QR and Code verification.
-          </p>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 20, textAlign: 'left' }}>
-            {/* Teacher Card */}
-            <div 
-              onClick={() => navigate('/teacher/login')}
-              style={{ background: '#131b2e', border: '1px solid #1e293b', borderRadius: 16, padding: '24px 20px', cursor: 'pointer', transition: 'transform 0.2s, border-color 0.2s', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.3)' }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = '#3b82f6'; (e.currentTarget as HTMLDivElement).style.transform = 'translateY(-2px)'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = '#1e293b'; (e.currentTarget as HTMLDivElement).style.transform = 'none'; }}
-            >
-              <div style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, marginBottom: 16 }}>
-                👨‍🏫
-              </div>
-              <h3 style={{ margin: '0 0 6px', fontSize: 18, color: '#f8fafc', fontWeight: 700 }}>Teacher Portal</h3>
-              <p style={{ margin: '0 0 18px', fontSize: 13, color: '#94a3b8', lineHeight: 1.4 }}>
-                Faculty login to launch Dynamic QR or Code attendance sessions and view live reports.
-              </p>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 14, color: '#60a5fa', fontWeight: 600 }}>
-                Teacher Login &rarr;
-              </span>
-            </div>
-
-            {/* Student Card */}
-            <div 
-              onClick={() => navigate('/student')}
-              style={{ background: '#131b2e', border: '1px solid #1e293b', borderRadius: 16, padding: '24px 20px', cursor: 'pointer', transition: 'transform 0.2s, border-color 0.2s', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.3)' }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = '#10b981'; (e.currentTarget as HTMLDivElement).style.transform = 'translateY(-2px)'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = '#1e293b'; (e.currentTarget as HTMLDivElement).style.transform = 'none'; }}
-            >
-              <div style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, marginBottom: 16 }}>
-                🎓
-              </div>
-              <h3 style={{ margin: '0 0 6px', fontSize: 18, color: '#f8fafc', fontWeight: 700 }}>Student Attendance</h3>
-              <p style={{ margin: '0 0 18px', fontSize: 13, color: '#94a3b8', lineHeight: 1.4 }}>
-                Passwordless check-in with your enrollment number and classroom Dynamic QR or Code.
-              </p>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 14, color: '#34d399', fontWeight: 600 }}>
-                Student Attendance &rarr;
-              </span>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 40, fontSize: 12, color: '#64748b' }}>
-            PRAVAHAx Attendance Engine • Anti-Proxy Verification
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // 2. TEACHER LOGIN PAGE ( /teacher/login )
-  if (currentPath === '/teacher/login') {
-    // If already authenticated, redirect to dashboard
-    if (teacherToken) {
+  // 1. UNIFIED LOGIN PORTAL ( / and /teacher/login )
+  if (currentPath === '/' || currentPath === '/teacher/login' || currentPath === '/student/login') {
+    // If teacher is already authenticated and visits /teacher/login, go to /teacher
+    if (teacherToken && currentPath === '/teacher/login') {
       navigate('/teacher');
+      return null;
     }
 
     return (
-      <div style={{ minHeight: '100vh', background: '#0b0f19', color: '#f8fafc', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px 16px', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-        <div style={{ width: '100%', maxWidth: 400, background: '#131b2e', border: '1px solid #1e293b', borderRadius: 20, padding: 32, boxShadow: '0 20px 40px rgba(0,0,0,0.4)', boxSizing: 'border-box' }}>
-          <div style={{ textAlign: 'center', marginBottom: 24 }}>
-            <div style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, marginBottom: 12 }}>
-              👨‍🏫
+      <div style={{ minHeight: '100vh', background: 'radial-gradient(ellipse at 50% 0%, #172554 0%, #0b0f19 70%)', color: '#f8fafc', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 16px', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
+        <div style={{ maxWidth: 480, width: '100%', textAlign: 'center' }}>
+          {/* Header Branding */}
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 30, background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.35)', color: '#60a5fa', fontSize: 13, fontWeight: 700, marginBottom: 16 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#3b82f6', boxShadow: '0 0 10px #3b82f6' }} />
+            PRAVAHAx ERP System
+          </div>
+          <h1 style={{ fontSize: '2.4rem', fontWeight: 800, margin: '0 0 8px', letterSpacing: '-0.03em', background: 'linear-gradient(135deg, #ffffff 30%, #94a3b8 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+            PRAVAHAx Attendance
+          </h1>
+          <p style={{ fontSize: '0.95rem', color: '#94a3b8', margin: '0 auto 24px', maxWidth: 420, lineHeight: 1.5 }}>
+            Enterprise anti-proxy attendance with Dynamic QR and Code verification. Select your portal below to begin:
+          </p>
+
+          {/* Unified Login Box */}
+          <div style={{ background: '#131b2e', border: '1px solid #1e293b', borderRadius: 24, padding: '26px 22px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)', boxSizing: 'border-box' }}>
+            {/* Dual Portal Switcher Tabs */}
+            <div style={{ display: 'flex', background: '#0b0f19', padding: 4, borderRadius: 14, marginBottom: 22, border: '1px solid #1e293b' }}>
+              <button
+                type="button"
+                onClick={() => setStartTab('FACULTY')}
+                style={{
+                  flex: 1,
+                  padding: '10px 12px',
+                  border: 'none',
+                  borderRadius: 10,
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                  fontSize: 14,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  background: startTab === 'FACULTY' ? 'linear-gradient(135deg, #2563eb, #1d4ed8)' : 'transparent',
+                  color: startTab === 'FACULTY' ? '#ffffff' : '#94a3b8',
+                  boxShadow: startTab === 'FACULTY' ? '0 4px 12px rgba(37, 99, 235, 0.4)' : 'none',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <span>👨‍🏫</span> Faculty Login
+              </button>
+              <button
+                type="button"
+                onClick={() => setStartTab('STUDENT')}
+                style={{
+                  flex: 1,
+                  padding: '10px 12px',
+                  border: 'none',
+                  borderRadius: 10,
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                  fontSize: 14,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  background: startTab === 'STUDENT' ? 'linear-gradient(135deg, #059669, #047857)' : 'transparent',
+                  color: startTab === 'STUDENT' ? '#ffffff' : '#94a3b8',
+                  boxShadow: startTab === 'STUDENT' ? '0 4px 12px rgba(5, 150, 105, 0.4)' : 'none',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <span>🎓</span> Student Login
+              </button>
             </div>
-            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: '#f8fafc' }}>Teacher Login</h2>
-            <p style={{ margin: '6px 0 0', fontSize: 13, color: '#94a3b8' }}>Sign in to manage classroom attendance sessions</p>
+
+            {/* TAB 1: FACULTY / TEACHER LOGIN */}
+            {startTab === 'FACULTY' && (
+              <div>
+                <div style={{ textAlign: 'left', marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, color: '#94a3b8' }}>
+                    Sign in with faculty credentials to launch and monitor attendance sessions.
+                  </div>
+                </div>
+
+                {loginError && (
+                  <div style={{ padding: '10px 12px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 10, color: '#fca5a5', fontSize: 13, marginBottom: 16, textAlign: 'left' }}>
+                    ✕ {loginError}
+                  </div>
+                )}
+
+                <form onSubmit={handleTeacherLogin}>
+                  <div style={{ marginBottom: 14, textAlign: 'left' }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#cbd5e1', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      Teacher ID or Email
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. teacher@test.com"
+                      value={teacherIdentifier}
+                      onChange={(e) => setTeacherIdentifier(e.target.value)}
+                      required
+                      style={{ width: '100%', padding: '11px 14px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
+                    />
+                  </div>
+
+                  <div style={{ marginBottom: 18, textAlign: 'left' }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#cbd5e1', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      Password
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="••••••••"
+                      value={teacherPassword}
+                      onChange={(e) => setTeacherPassword(e.target.value)}
+                      required
+                      style={{ width: '100%', padding: '11px 14px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
+                    />
+                  </div>
+
+                  {/* 1-Click Demo Fill for Teacher */}
+                  <div style={{ textAlign: 'left', marginBottom: 18 }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTeacherIdentifier('teacher@test.com');
+                        setTeacherPassword('teacher123');
+                      }}
+                      style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', color: '#60a5fa', padding: '5px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      ⚡ Quick Fill: teacher@test.com / teacher123
+                    </button>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loginLoading}
+                    style={{ width: '100%', padding: '12px 16px', background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: '#ffffff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: loginLoading ? 'not-allowed' : 'pointer', boxShadow: '0 4px 14px rgba(37, 99, 235, 0.4)' }}
+                  >
+                    {loginLoading ? 'Signing In...' : 'Sign In as Faculty →'}
+                  </button>
+                </form>
+
+                {teacherToken && (
+                  <div style={{ marginTop: 14, textAlign: 'center' }}>
+                    <button
+                      onClick={() => navigate('/teacher')}
+                      style={{ background: 'transparent', border: 'none', color: '#34d399', fontSize: 13, cursor: 'pointer', textDecoration: 'underline' }}
+                    >
+                      ✓ Already logged in as Teacher &rarr; Open Dashboard
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 2: STUDENT LOGIN */}
+            {startTab === 'STUDENT' && (
+              <div>
+                <div style={{ textAlign: 'left', marginBottom: 14 }}>
+                  <div style={{ fontSize: 13, color: '#94a3b8' }}>
+                    Sign in using your student username/ID and password (<code style={{ color: '#34d399' }}>pravaha@123</code>).
+                  </div>
+                </div>
+
+                {studentLoginError && (
+                  <div style={{ padding: '10px 12px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 10, color: '#fca5a5', fontSize: 13, marginBottom: 16, textAlign: 'left' }}>
+                    ✕ {studentLoginError}
+                  </div>
+                )}
+
+                {/* 5 Required Student 1-Tap Quick Fill Buttons */}
+                <div style={{ textAlign: 'left', marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Quick Select Student (5 Student Accounts):
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {[
+                      { name: 'Chetan', user: 'chetan', id: 'STU001' },
+                      { name: 'Dhruv', user: 'dhruv', id: 'STU002' },
+                      { name: 'Pallav', user: 'pallav', id: 'STU003' },
+                      { name: 'Varad', user: 'varad', id: 'STU004' },
+                      { name: 'Devang', user: 'devang', id: 'STU005' },
+                    ].map((s) => (
+                      <button
+                        key={s.user}
+                        type="button"
+                        onClick={() => {
+                          setStudentIdentifier(s.user);
+                          setStudentPassword('pravaha@123');
+                          setEnrollmentInput(s.id);
+                        }}
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: 8,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          border: studentIdentifier.toLowerCase() === s.user ? '1px solid #10b981' : '1px solid #334155',
+                          background: studentIdentifier.toLowerCase() === s.user ? 'rgba(16, 185, 129, 0.2)' : '#0b0f19',
+                          color: studentIdentifier.toLowerCase() === s.user ? '#34d399' : '#cbd5e1'
+                        }}
+                      >
+                        🎓 {s.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <form onSubmit={handleStudentLogin}>
+                  <div style={{ marginBottom: 14, textAlign: 'left' }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#cbd5e1', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      Student Username or ID
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. chetan, dhruv, STU001"
+                      value={studentIdentifier}
+                      onChange={(e) => setStudentIdentifier(e.target.value)}
+                      required
+                      style={{ width: '100%', padding: '11px 14px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
+                    />
+                  </div>
+
+                  <div style={{ marginBottom: 18, textAlign: 'left' }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#cbd5e1', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      Password
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="pravaha@123"
+                      value={studentPassword}
+                      onChange={(e) => setStudentPassword(e.target.value)}
+                      required
+                      style={{ width: '100%', padding: '11px 14px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
+                    />
+                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                      Default password for all student accounts: <code style={{ color: '#34d399' }}>pravaha@123</code>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={studentLoginLoading}
+                    style={{ width: '100%', padding: '12px 16px', background: 'linear-gradient(135deg, #059669, #047857)', color: '#ffffff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: studentLoginLoading ? 'not-allowed' : 'pointer', boxShadow: '0 4px 14px rgba(5, 150, 105, 0.4)' }}
+                  >
+                    {studentLoginLoading ? 'Signing In...' : 'Sign In as Student →'}
+                  </button>
+                </form>
+
+                {studentToken && (
+                  <div style={{ marginTop: 14, textAlign: 'center' }}>
+                    <button
+                      onClick={() => navigate('/student')}
+                      style={{ background: 'transparent', border: 'none', color: '#34d399', fontSize: 13, cursor: 'pointer', textDecoration: 'underline' }}
+                    >
+                      ✓ Logged in as {studentUser?.name || 'Student'} &rarr; Go to Attendance Portal
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {loginError && (
-            <div style={{ padding: '10px 14px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 10, color: '#fca5a5', fontSize: 13, marginBottom: 18, textAlign: 'left' }}>
-              ✕ {loginError}
-            </div>
-          )}
-
-          <form onSubmit={handleTeacherLogin}>
-            <div style={{ marginBottom: 16, textAlign: 'left' }}>
-              <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#cbd5e1', marginBottom: 6 }}>
-                Teacher ID / Email
-              </label>
-              <input 
-                type="text"
-                placeholder="e.g. teacher@test.com"
-                value={teacherIdentifier}
-                onChange={(e) => setTeacherIdentifier(e.target.value)}
-                required
-                style={{ width: '100%', padding: '12px 14px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
-              />
-            </div>
-
-            <div style={{ marginBottom: 24, textAlign: 'left' }}>
-              <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#cbd5e1', marginBottom: 6 }}>
-                Password
-              </label>
-              <input 
-                type="password"
-                placeholder="Enter password"
-                value={teacherPassword}
-                onChange={(e) => setTeacherPassword(e.target.value)}
-                required
-                style={{ width: '100%', padding: '12px 14px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={loginLoading}
-              style={{ width: '100%', padding: '13px 16px', background: '#2563eb', color: '#ffffff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: loginLoading ? 'not-allowed' : 'pointer', transition: 'background 0.2s', boxShadow: '0 4px 14px rgba(37, 99, 235, 0.4)' }}
-            >
-              {loginLoading ? 'Signing In...' : 'Sign In'}
-            </button>
-          </form>
-
-          <div style={{ marginTop: 24, textAlign: 'center' }}>
-            <button 
-              onClick={() => navigate('/')}
-              style={{ background: 'transparent', border: 'none', color: '#64748b', fontSize: 13, cursor: 'pointer', textDecoration: 'underline' }}
-            >
-              &larr; Back to Home
-            </button>
+          <div style={{ marginTop: 24, fontSize: 12, color: '#64748b' }}>
+            PRAVAHAx Attendance Engine • PostgreSQL Persistent Dataset
           </div>
         </div>
       </div>
@@ -1078,69 +1278,153 @@ function App() {
 
   // 4. STUDENT ATTENDANCE PORTAL ( /student )
   if (currentPath === '/student') {
-    const resolvedStudentName = getResolvedStudentName(enrollmentInput);
-
     return (
-      <div style={{ minHeight: '100vh', background: '#0b0f19', color: '#f8fafc', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', padding: '36px 16px', fontFamily: 'system-ui, -apple-system, sans-serif', boxSizing: 'border-box' }}>
+      <div style={{ minHeight: '100vh', background: 'radial-gradient(ellipse at 50% 0%, #064e3b 0%, #0b0f19 70%)', color: '#f8fafc', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', padding: '32px 16px', fontFamily: 'system-ui, -apple-system, sans-serif', boxSizing: 'border-box' }}>
         
-        {/* Main Check-In Card */}
-        <div style={{ width: '100%', maxWidth: 480, background: '#131b2e', border: '1px solid #1e293b', borderRadius: 24, padding: '28px 22px', boxShadow: '0 20px 40px rgba(0,0,0,0.5)', textAlign: 'center', boxSizing: 'border-box' }}>
+        {/* Main Student Card */}
+        <div style={{ width: '100%', maxWidth: 480, background: '#131b2e', border: '1px solid #1e293b', borderRadius: 24, padding: '26px 20px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)', textAlign: 'center', boxSizing: 'border-box' }}>
           
-          {/* Student Header */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+          {/* Student Portal Header */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, borderBottom: '1px solid #1e293b', paddingBottom: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, boxShadow: '0 2px 10px rgba(16, 185, 129, 0.2)' }}>
                 🎓
               </div>
               <div style={{ textAlign: 'left' }}>
-                <div style={{ fontWeight: 800, fontSize: 17, color: '#f8fafc', letterSpacing: '-0.3px' }}>PRAVAHAx Attendance</div>
-                <div style={{ fontSize: 12, color: '#94a3b8' }}>Student Passwordless Check-In</div>
+                <div style={{ fontWeight: 800, fontSize: 16, color: '#f8fafc', letterSpacing: '-0.3px' }}>PRAVAHAx Student Portal</div>
+                <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                  {studentUser ? `${studentUser.name} (${studentUser.student_id || enrollmentInput})` : 'Student Login Required'}
+                </div>
               </div>
             </div>
 
-            <button
-              onClick={() => navigate('/')}
-              style={{ background: '#0b0f19', border: '1px solid #334155', color: '#94a3b8', padding: '5px 12px', borderRadius: 8, fontSize: 12, cursor: 'pointer', fontWeight: 600 }}
-            >
-              Home
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {studentUser ? (
+                <button
+                  onClick={handleStudentLogout}
+                  style={{ background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.25)', color: '#fca5a5', padding: '5px 10px', borderRadius: 8, fontSize: 12, cursor: 'pointer', fontWeight: 600 }}
+                >
+                  Logout
+                </button>
+              ) : (
+                <button
+                  onClick={() => navigate('/')}
+                  style={{ background: '#0b0f19', border: '1px solid #334155', color: '#94a3b8', padding: '5px 12px', borderRadius: 8, fontSize: 12, cursor: 'pointer', fontWeight: 600 }}
+                >
+                  Home
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Active Lecture Status Banner */}
-          {activeLectureInfo?.active ? (
-            <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 18, display: 'flex', alignItems: 'center', justifyContent: 'space-between', textAlign: 'left' }}>
-              <div>
-                <div style={{ fontSize: 11, color: '#34d399', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 8px #10b981' }} />
-                  Session Active
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#f8fafc', marginTop: 2 }}>{activeLectureInfo.className}</div>
+          {/* If Student is NOT authenticated, show the login form first */}
+          {!studentUser ? (
+            <div>
+              <div style={{ textAlign: 'left', marginBottom: 16 }}>
+                <h3 style={{ margin: '0 0 6px', fontSize: 18, color: '#f8fafc', fontWeight: 700 }}>Student Sign In</h3>
+                <p style={{ margin: 0, fontSize: 13, color: '#94a3b8' }}>
+                  Please select or enter your student account to access classroom attendance.
+                </p>
               </div>
-              <span style={{ fontSize: 11, padding: '4px 8px', borderRadius: 6, background: activeLectureInfo.mode === 'DYNAMIC_QR' ? '#2563eb' : '#059669', color: '#fff', fontWeight: 700 }}>
-                {activeLectureInfo.mode === 'DYNAMIC_QR' ? '⚡ Dynamic QR' : '🔢 Code Mode'}
-              </span>
-            </div>
-          ) : (
-            <div style={{ background: 'rgba(234, 179, 8, 0.08)', border: '1px solid rgba(234, 179, 8, 0.25)', borderRadius: 12, padding: '8px 12px', marginBottom: 18, fontSize: 12, color: '#fbbf24', textAlign: 'left' }}>
-              ⏸ Waiting for teacher to initiate attendance session...
-            </div>
-          )}
 
-          {/* Success Screen */}
-          {studentSuccess ? (
+              {studentLoginError && (
+                <div style={{ padding: '10px 12px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 10, color: '#fca5a5', fontSize: 13, marginBottom: 16, textAlign: 'left' }}>
+                  ✕ {studentLoginError}
+                </div>
+              )}
+
+              {/* 5 Quick-Select Test Buttons */}
+              <div style={{ textAlign: 'left', marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Quick Select Student:
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {[
+                    { name: 'Chetan', user: 'chetan', id: 'STU001' },
+                    { name: 'Dhruv', user: 'dhruv', id: 'STU002' },
+                    { name: 'Pallav', user: 'pallav', id: 'STU003' },
+                    { name: 'Varad', user: 'varad', id: 'STU004' },
+                    { name: 'Devang', user: 'devang', id: 'STU005' },
+                  ].map((s) => (
+                    <button
+                      key={s.user}
+                      type="button"
+                      onClick={() => {
+                        setStudentIdentifier(s.user);
+                        setStudentPassword('pravaha@123');
+                        setEnrollmentInput(s.id);
+                      }}
+                      style={{
+                        padding: '5px 10px',
+                        borderRadius: 8,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        border: studentIdentifier.toLowerCase() === s.user ? '1px solid #10b981' : '1px solid #334155',
+                        background: studentIdentifier.toLowerCase() === s.user ? 'rgba(16, 185, 129, 0.2)' : '#0b0f19',
+                        color: studentIdentifier.toLowerCase() === s.user ? '#34d399' : '#cbd5e1'
+                      }}
+                    >
+                      🎓 {s.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <form onSubmit={handleStudentLogin}>
+                <div style={{ marginBottom: 14, textAlign: 'left' }}>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#cbd5e1', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Student Username or ID
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. chetan, dhruv, STU001"
+                    value={studentIdentifier}
+                    onChange={(e) => setStudentIdentifier(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: '11px 14px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: 18, textAlign: 'left' }}>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#cbd5e1', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="pravaha@123"
+                    value={studentPassword}
+                    onChange={(e) => setStudentPassword(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: '11px 14px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
+                  />
+                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                    Password for all 5 student accounts: <code style={{ color: '#34d399' }}>pravaha@123</code>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={studentLoginLoading}
+                  style={{ width: '100%', padding: '12px 16px', background: 'linear-gradient(135deg, #059669, #047857)', color: '#ffffff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: studentLoginLoading ? 'not-allowed' : 'pointer', boxShadow: '0 4px 14px rgba(5, 150, 105, 0.4)' }}
+                >
+                  {studentLoginLoading ? 'Signing In...' : 'Sign In as Student →'}
+                </button>
+              </form>
+            </div>
+          ) : studentSuccess ? (
+            /* Success Screen */
             <div style={{ padding: '24px 16px', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: 20 }}>
               <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#10b981', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34, margin: '0 auto 16px', boxShadow: '0 8px 24px rgba(16, 185, 129, 0.35)' }}>
                 ✓
               </div>
               <h2 style={{ margin: '0 0 6px', fontSize: 22, color: '#34d399', fontWeight: 800 }}>Attendance Marked!</h2>
               <p style={{ margin: '0 0 16px', fontSize: 13, color: '#94a3b8' }}>
-                Your institutional record has been securely confirmed.
+                Your institutional attendance record has been confirmed.
               </p>
 
               <div style={{ background: '#0b0f19', border: '1px solid #1e293b', borderRadius: 12, padding: 14, textAlign: 'left', fontSize: 13, color: '#cbd5e1', marginBottom: 20 }}>
-                {resolvedStudentName && (
-                  <div style={{ marginBottom: 6 }}><strong style={{ color: '#94a3b8' }}>Student:</strong> <span style={{ color: '#f8fafc', fontWeight: 700 }}>{resolvedStudentName}</span> ({enrollmentInput})</div>
-                )}
+                <div style={{ marginBottom: 6 }}><strong style={{ color: '#94a3b8' }}>Student:</strong> <span style={{ color: '#f8fafc', fontWeight: 700 }}>{studentUser.name}</span> ({studentUser.student_id || enrollmentInput})</div>
                 <div style={{ marginBottom: 6 }}><strong style={{ color: '#94a3b8' }}>Course:</strong> {studentSuccess.class_name} ({studentSuccess.subject})</div>
                 <div style={{ marginBottom: 6 }}><strong style={{ color: '#94a3b8' }}>Time:</strong> {studentSuccess.time}</div>
                 <div><strong style={{ color: '#94a3b8' }}>Method:</strong> <span style={{ color: '#34d399', fontWeight: 600 }}>{studentSuccess.method} Verified</span></div>
@@ -1157,178 +1441,139 @@ function App() {
                 Done
               </button>
             </div>
-          ) : (
-            <>
-              {/* Step 1: 30-Student Quick Select & Input */}
-              <div style={{ textAlign: 'left', marginBottom: 18 }}>
-                <label style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#cbd5e1', marginBottom: 6 }}>
-                  Student Institutional ID (Passwordless)
-                </label>
+          ) : !activeLectureInfo?.active ? (
+            /* STANDBY WAITING ROOM: Teacher has not started attendance */
+            <div style={{ padding: '32px 16px', background: 'rgba(30, 41, 59, 0.4)', border: '1px solid #1e293b', borderRadius: 20 }}>
+              <div style={{ width: 60, height: 60, borderRadius: '50%', background: 'rgba(234, 179, 8, 0.15)', color: '#fbbf24', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, margin: '0 auto 16px', border: '1px solid rgba(234, 179, 8, 0.3)' }}>
+                ⏳
+              </div>
+              <h3 style={{ margin: '0 0 8px', fontSize: 18, color: '#f8fafc', fontWeight: 700 }}>
+                Waiting for Faculty to Start
+              </h3>
+              <p style={{ margin: '0 auto 20px', maxWidth: 360, fontSize: 13, color: '#94a3b8', lineHeight: 1.5 }}>
+                Attendance has not been initiated by the teacher yet. As soon as the teacher starts the session, your camera QR scanner or code keypad will automatically launch!
+              </p>
 
-                {/* Dropdown with 30 Registered Dummy Students */}
-                <select
-                  value={enrollmentInput}
-                  onChange={(e) => setEnrollmentInput(e.target.value)}
-                  style={{ width: '100%', padding: '11px 12px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 14, fontWeight: 600, outline: 'none', marginBottom: 10, boxSizing: 'border-box' }}
-                >
-                  <option value="">-- Quick Select from 30 Registered Students --</option>
-                  {STUDENT_ROSTER_LIST.map((s) => (
-                    <option key={s.enrollment} value={s.enrollment}>
-                      {s.enrollment} — {s.name}
-                    </option>
-                  ))}
-                </select>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 20, background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.25)', color: '#60a5fa', fontSize: 12, fontWeight: 600 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#3b82f6', boxShadow: '0 0 8px #3b82f6' }} />
+                Live Status: Listening for session start...
+              </div>
+            </div>
+          ) : activeLectureInfo.mode === 'DYNAMIC_QR' ? (
+            /* TEACHER SELECTED DYNAMIC QR: Show ONLY Camera QR Scanner */
+            <div>
+              <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', textAlign: 'left' }}>
+                <div>
+                  <div style={{ fontSize: 11, color: '#60a5fa', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#3b82f6', display: 'inline-block', boxShadow: '0 0 8px #3b82f6' }} />
+                    Active Mode: Dynamic QR
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#f8fafc', marginTop: 2 }}>{activeLectureInfo.className || 'Lecture Session'}</div>
+                </div>
+                <span style={{ fontSize: 11, padding: '4px 8px', borderRadius: 6, background: '#2563eb', color: '#fff', fontWeight: 700 }}>
+                  ⚡ Camera Active
+                </span>
+              </div>
 
-                {/* Quick 1-Tap Chips */}
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-                  {STUDENT_ROSTER_LIST.slice(0, 5).map((s) => (
-                    <button
-                      key={s.enrollment}
-                      type="button"
-                      onClick={() => setEnrollmentInput(s.enrollment)}
-                      style={{
-                        padding: '4px 9px',
-                        borderRadius: 6,
-                        fontSize: 11,
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        border: enrollmentInput === s.enrollment ? '1px solid #3b82f6' : '1px solid #1e293b',
-                        background: enrollmentInput === s.enrollment ? 'rgba(59, 130, 246, 0.25)' : '#0b0f19',
-                        color: enrollmentInput === s.enrollment ? '#60a5fa' : '#94a3b8'
-                      }}
-                    >
-                      {s.enrollment} ({s.name.split(' ')[0]})
-                    </button>
-                  ))}
+              <div style={{ background: '#0b0f19', border: '1px solid #1e293b', borderRadius: 16, padding: '18px 14px' }}>
+                <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 12 }}>
+                  Point your camera at the Dynamic QR code on the teacher's screen:
                 </div>
 
-                {/* Manual Textbox (Supports STU001, STUD002, s1 etc.) */}
-                <input 
-                  type="text"
-                  placeholder="e.g. STU001 or STUD002"
-                  value={enrollmentInput}
-                  onChange={(e) => setEnrollmentInput(e.target.value.toUpperCase())}
-                  style={{ width: '100%', padding: '12px 14px', borderRadius: 10, background: '#0b0f19', border: '1px solid #334155', color: '#f8fafc', fontSize: 15, fontWeight: 700, outline: 'none', boxSizing: 'border-box' }}
+                <QrScanner
+                  onScanSuccess={handleStudentScanQr}
+                  isScanningLocked={isScanningLocked || verifyingAttendance}
                 />
 
-                {/* Detected Student Identity Badge */}
-                {resolvedStudentName ? (
-                  <div style={{ marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 6, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: 12, fontWeight: 700 }}>
-                    <span>✓ Identified Student:</span> <span>{resolvedStudentName}</span>
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
-                    No password required. Institutional enrollment number identifies your attendance record.
-                  </div>
-                )}
-              </div>
+                {/* Manual token input fallback */}
+                <div style={{ marginTop: 12 }}>
+                  <button
+                    onClick={() => setShowManualInput(!showManualInput)}
+                    style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}
+                  >
+                    {showManualInput ? 'Hide manual token' : 'Trouble scanning? Enter token manually'}
+                  </button>
 
-              {/* Mode Selector Tabs */}
-              <div style={{ display: 'flex', background: '#0b0f19', padding: 4, borderRadius: 12, marginBottom: 16, border: '1px solid #1e293b' }}>
-                <button
-                  onClick={() => { setStudentModeTab('DYNAMIC_QR'); setStudentError(''); }}
-                  style={{ flex: 1, padding: '10px 0', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13, background: studentModeTab === 'DYNAMIC_QR' ? '#2563eb' : 'transparent', color: studentModeTab === 'DYNAMIC_QR' ? '#ffffff' : '#94a3b8', transition: 'all 0.2s' }}
-                >
-                  ⚡ Scan QR
-                </button>
-                <button
-                  onClick={() => { setStudentModeTab('CODE'); setStudentError(''); }}
-                  style={{ flex: 1, padding: '10px 0', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13, background: studentModeTab === 'CODE' ? '#059669' : 'transparent', color: studentModeTab === 'CODE' ? '#ffffff' : '#94a3b8', transition: 'all 0.2s' }}
-                >
-                  🔢 Enter Code
-                </button>
-              </div>
-
-              {/* Tab Content */}
-              <div style={{ background: '#0b0f19', border: '1px solid #1e293b', borderRadius: 16, padding: '18px 14px' }}>
-                {studentModeTab === 'DYNAMIC_QR' ? (
-                  /* Dynamic QR Scan Flow */
-                  <div>
-                    <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 12 }}>
-                      Align camera with the rotating Dynamic QR code on teacher's screen:
-                    </div>
-
-                    <QrScanner
-                      onScanSuccess={handleStudentScanQr}
-                      isScanningLocked={isScanningLocked || verifyingAttendance}
-                    />
-
-                    {/* Manual token input fallback */}
-                    <div style={{ marginTop: 12 }}>
+                  {showManualInput && (
+                    <div style={{ marginTop: 10 }}>
+                      <input 
+                        type="text"
+                        placeholder="Paste signed token here"
+                        value={manualQrInput}
+                        onChange={(e) => setManualQrInput(e.target.value)}
+                        style={{ width: '100%', padding: 8, fontSize: 12, borderRadius: 6, background: '#131b2e', border: '1px solid #334155', color: '#fff', boxSizing: 'border-box' }}
+                      />
                       <button
-                        onClick={() => setShowManualInput(!showManualInput)}
-                        style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}
+                        onClick={() => handleStudentScanQr(manualQrInput)}
+                        disabled={verifyingAttendance}
+                        style={{ marginTop: 8, padding: '8px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontWeight: 600 }}
                       >
-                        {showManualInput ? 'Hide manual token' : 'Manual token input'}
+                        Submit Token
                       </button>
-
-                      {showManualInput && (
-                        <div style={{ marginTop: 10 }}>
-                          <input 
-                            type="text"
-                            placeholder="Paste token here"
-                            value={manualQrInput}
-                            onChange={(e) => setManualQrInput(e.target.value)}
-                            style={{ width: '100%', padding: 8, fontSize: 12, borderRadius: 6, background: '#131b2e', border: '1px solid #334155', color: '#fff', boxSizing: 'border-box' }}
-                          />
-                          <button
-                            onClick={() => handleStudentScanQr(manualQrInput)}
-                            disabled={verifyingAttendance}
-                            style={{ marginTop: 8, padding: '8px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontWeight: 600 }}
-                          >
-                            Submit Token
-                          </button>
-                        </div>
-                      )}
                     </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* TEACHER SELECTED CODE: Show ONLY 4-digit numeric code entry */
+            <div>
+              <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', textAlign: 'left' }}>
+                <div>
+                  <div style={{ fontSize: 11, color: '#34d399', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 8px #10b981' }} />
+                    Active Mode: Code Mode
                   </div>
-                ) : (
-                  /* Attendance Code Flow */
-                  <div style={{ padding: '8px 4px' }}>
-                    <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 12 }}>
-                      Enter the 4-digit code displayed by your teacher:
-                    </div>
-                    <input 
-                      type="text"
-                      maxLength={4}
-                      placeholder="----"
-                      value={studentPinInput}
-                      onChange={(e) => setStudentPinInput(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleStudentSubmitCode()}
-                      style={{ width: 140, padding: '10px 8px', fontSize: 28, textAlign: 'center', letterSpacing: 6, borderRadius: 10, background: '#131b2e', border: '2px solid #334155', color: '#34d399', fontWeight: 800, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box' }}
-                    />
-                    <button
-                      onClick={handleStudentSubmitCode}
-                      disabled={verifyingAttendance}
-                      style={{ display: 'block', width: '100%', marginTop: 16, padding: '12px 16px', background: '#059669', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: verifyingAttendance ? 'not-allowed' : 'pointer', boxShadow: '0 4px 14px rgba(5, 150, 105, 0.4)' }}
-                    >
-                      {verifyingAttendance ? 'Verifying Attendance...' : 'Mark Attendance'}
-                    </button>
-                  </div>
-                )}
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#f8fafc', marginTop: 2 }}>{activeLectureInfo.className || 'Lecture Session'}</div>
+                </div>
+                <span style={{ fontSize: 11, padding: '4px 8px', borderRadius: 6, background: '#059669', color: '#fff', fontWeight: 700 }}>
+                  🔢 4-Digit Code
+                </span>
               </div>
 
-              {/* Status or Error Banner */}
-              {verifyingAttendance && (
-                <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 10, background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', color: '#60a5fa', fontSize: 13 }}>
-                  Verifying attendance record with server...
+              <div style={{ background: '#0b0f19', border: '1px solid #1e293b', borderRadius: 16, padding: '24px 16px' }}>
+                <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 14 }}>
+                  Enter the 4-digit classroom code displayed by your teacher:
                 </div>
-              )}
+                <input 
+                  type="text"
+                  maxLength={4}
+                  placeholder="----"
+                  value={studentPinInput}
+                  onChange={(e) => setStudentPinInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleStudentSubmitCode()}
+                  style={{ width: 150, padding: '12px 8px', fontSize: 32, textAlign: 'center', letterSpacing: 8, borderRadius: 12, background: '#131b2e', border: '2px solid #334155', color: '#34d399', fontWeight: 800, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box' }}
+                />
+                <button
+                  onClick={handleStudentSubmitCode}
+                  disabled={verifyingAttendance || studentPinInput.length !== 4}
+                  style={{ display: 'block', width: '100%', marginTop: 20, padding: '13px 16px', background: 'linear-gradient(135deg, #059669, #047857)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: (verifyingAttendance || studentPinInput.length !== 4) ? 'not-allowed' : 'pointer', boxShadow: '0 4px 14px rgba(5, 150, 105, 0.4)' }}
+                >
+                  {verifyingAttendance ? 'Verifying Attendance...' : 'Mark Attendance →'}
+                </button>
+              </div>
+            </div>
+          )}
 
-              {studentError && (
-                <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 10, background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', fontSize: 13, textAlign: 'left' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span>✕ {studentError}</span>
-                    <button
-                      onClick={() => { setStudentError(''); setIsScanningLocked(false); }}
-                      style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 14, fontWeight: 700 }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-              )}
-            </>
+          {/* Status or Error Banner */}
+          {verifyingAttendance && (
+            <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 10, background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', color: '#60a5fa', fontSize: 13 }}>
+              Verifying attendance record with server...
+            </div>
+          )}
+
+          {studentError && (
+            <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 10, background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', fontSize: 13, textAlign: 'left' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>✕ {studentError}</span>
+                <button
+                  onClick={() => { setStudentError(''); setIsScanningLocked(false); }}
+                  style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 14, fontWeight: 700 }}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
           )}
         </div>
 
@@ -1338,7 +1583,7 @@ function App() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 10px #10b981' }} />
               <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: '#f8fafc' }}>
-                Classroom Attendance Log
+                Live Attendance Activity Stream
               </h3>
             </div>
             <span style={{ fontSize: 11, color: '#34d399', fontWeight: 600 }}>
@@ -1349,9 +1594,9 @@ function App() {
           {studentRecentLogs && studentRecentLogs.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 260, overflowY: 'auto' }}>
               {studentRecentLogs.map((log: any, idx: number) => {
-                const cleanInput = enrollmentInput.trim().toUpperCase().replace('STUD', 'STU');
-                const isMe = (log.enrollment_number === cleanInput) ||
-                             (log.enrollment_number === enrollmentInput.trim().toUpperCase());
+                const currentId = studentUser?.student_id || studentUser?.id || enrollmentInput.trim().toUpperCase();
+                const isMe = (log.enrollment_number && log.enrollment_number === currentId) ||
+                             (log.name && studentUser && log.name.toLowerCase() === studentUser.name.toLowerCase());
                 return (
                   <div
                     key={idx}

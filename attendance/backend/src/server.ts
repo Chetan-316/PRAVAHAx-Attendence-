@@ -223,6 +223,88 @@ app.post('/api/teacher/login', (req, res) => {
   );
 });
 
+// Student Login with Password Verification (pravaha@123)
+app.post('/api/student/login', (req, res) => {
+  const rawIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '') as string;
+  const clientIp = getSubnet(rawIp);
+
+  if (isRateLimited(`student_login:${clientIp}`, 15, CONFIG.RATE_LIMIT_WINDOW_MS)) {
+    return res.status(429).json({ error: 'Too many login attempts. Please wait 1 minute.' });
+  }
+
+  const { identifier, email, student_id, password } = req.body || {};
+  const searchId = (identifier || email || student_id || '').trim();
+  const inputPassword = (password || '').trim();
+
+  if (!searchId || !inputPassword) {
+    return res.status(400).json({ error: 'Student username/ID and password are required' });
+  }
+
+  let normalizedEnr = searchId.toUpperCase();
+  if (normalizedEnr.startsWith('STUD') && !normalizedEnr.startsWith('STUDENT')) {
+    normalizedEnr = normalizedEnr.replace('STUD', 'STU');
+  }
+
+  db.get(
+    `SELECT id, name, email, role, student_id, password_hash 
+     FROM users 
+     WHERE (
+       LOWER(email) = LOWER(?) 
+       OR LOWER(email) LIKE LOWER(?) || '@%'
+       OR LOWER(name) = LOWER(?) 
+       OR LOWER(name) LIKE LOWER(?) || ' %'
+       OR UPPER(student_id) = ? 
+       OR UPPER(student_id) = ? 
+       OR id = ?
+     )
+     AND role = 'STUDENT'
+     ORDER BY (password_hash IS NOT NULL) DESC, (student_id IS NOT NULL) DESC
+     LIMIT 1`,
+    [searchId, searchId, searchId, searchId, searchId.toUpperCase(), normalizedEnr, searchId],
+    (err, user: any) => {
+      if (err || !user) {
+        return res.status(401).json({ error: 'Invalid student ID or password' });
+      }
+
+      let isValid = false;
+      if (user.password_hash) {
+        isValid = verifyPassword(inputPassword, user.password_hash);
+      }
+      if (!isValid && inputPassword === 'pravaha@123') {
+        isValid = true;
+      }
+
+      if (!isValid) {
+        return res.status(401).json({ error: 'Invalid student ID or password' });
+      }
+
+      const token = jwt.sign(
+        {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: 'STUDENT',
+          student_id: user.student_id
+        },
+        CONFIG.JWT_SECRET,
+        { expiresIn: '8h' }
+      );
+
+      res.json({
+        success: true,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: 'STUDENT',
+          student_id: user.student_id
+        },
+        token
+      });
+    }
+  );
+});
+
 // Teacher Logout
 app.post('/api/teacher/logout', (req, res) => {
   res.json({ success: true, message: 'Logged out successfully' });
