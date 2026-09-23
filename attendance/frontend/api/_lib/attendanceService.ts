@@ -3,6 +3,8 @@ import { db } from './db.js';
 import {
   verifyPassword,
   generateStableCode,
+  generateRotatingCode,
+  verifyRotatingCode,
   generateDynamicQrToken,
   verifyDynamicQrToken,
   signTeacherSession
@@ -75,6 +77,7 @@ export class AttendanceService {
         session: AttendanceSession;
         qr?: { token: string; secondsRemaining: number; rotationInterval: number };
         code?: string;
+        codeInfo?: { code: string; secondsRemaining: number; rotationInterval: number };
       }
     | ApiErrorResponse
   > {
@@ -105,17 +108,17 @@ export class AttendanceService {
     const startedAt = new Date().toISOString();
 
     let code: string | null = null;
+    let codeInfo: { code: string; secondsRemaining: number; rotationInterval: number } | undefined;
     let qrInfo: { token: string; secondsRemaining: number; rotationInterval: number } | undefined;
 
     if (mode === 'CODE') {
-      // Generate collision-safe 6-digit code
-      let candidate = generateStableCode();
-      const collision = await db.queryOne(
-        `SELECT id FROM attendance_sessions WHERE status = 'ACTIVE' AND current_code = $1`,
-        [candidate]
-      );
-      if (collision) candidate = generateStableCode();
-      code = candidate;
+      const rot = generateRotatingCode(sessionId, sessionSecret);
+      code = rot.code;
+      codeInfo = {
+        code: rot.code,
+        secondsRemaining: rot.secondsRemaining,
+        rotationInterval: rot.rotationInterval
+      };
     }
 
     // Insert session into database
@@ -144,7 +147,8 @@ export class AttendanceService {
       success: true,
       session,
       qr: qrInfo,
-      code: code || undefined
+      code: code || undefined,
+      codeInfo
     };
   }
 
@@ -157,6 +161,7 @@ export class AttendanceService {
         session: AttendanceSession & { class_name: string; course: string };
         qr?: { token: string; secondsRemaining: number; rotationInterval: number };
         current_code?: string;
+        codeInfo?: { code: string; secondsRemaining: number; rotationInterval: number };
         presentCount: number;
         totalEnrolled: number;
         attendees: AttendeeView[];
@@ -196,8 +201,19 @@ export class AttendanceService {
     const totalEnrolled = totalEnrolledRows.length > 0 ? parseInt(totalEnrolledRows[0].count, 10) || 0 : 0;
 
     let qrInfo: { token: string; secondsRemaining: number; rotationInterval: number } | undefined;
+    let codeInfo: { code: string; secondsRemaining: number; rotationInterval: number } | undefined;
+    let currentCode: string | undefined;
+
     if (session.mode === 'DYNAMIC_QR') {
       qrInfo = generateDynamicQrToken(session.id, session.session_secret);
+    } else if (session.mode === 'CODE') {
+      const rot = generateRotatingCode(session.id, session.session_secret);
+      codeInfo = {
+        code: rot.code,
+        secondsRemaining: rot.secondsRemaining,
+        rotationInterval: rot.rotationInterval
+      };
+      currentCode = rot.code;
     }
 
     return {
@@ -207,7 +223,7 @@ export class AttendanceService {
         class_id: session.class_id,
         teacher_id: session.teacher_id,
         mode: session.mode,
-        current_code: session.current_code,
+        current_code: currentCode || session.current_code,
         session_secret: session.session_secret,
         started_at: session.started_at,
         status: session.status,
@@ -215,7 +231,8 @@ export class AttendanceService {
         course: session.course
       },
       qr: qrInfo,
-      current_code: session.current_code || undefined,
+      current_code: currentCode || session.current_code || undefined,
+      codeInfo,
       presentCount: attendees.length,
       totalEnrolled,
       attendees
@@ -258,7 +275,46 @@ export class AttendanceService {
   }
 
   // ==========================================
-  // Regenerate Attendance Code
+  // Teacher-Only Rotating Attendance Code Fetch
+  // ==========================================
+  static async getRotatingCode(
+    teacherId: string,
+    sessionId: string
+  ): Promise<
+    | {
+        code: string;
+        secondsRemaining: number;
+        rotationInterval: number;
+      }
+    | ApiErrorResponse
+  > {
+    const session = await db.queryOne<AttendanceSession>(
+      `SELECT * FROM attendance_sessions WHERE id = $1 AND teacher_id = $2`,
+      [sessionId, teacherId]
+    );
+
+    if (!session) {
+      return { success: false, error: 'Session not found or unauthorized', code: 'FORBIDDEN' };
+    }
+
+    if (session.status !== 'ACTIVE') {
+      return { success: false, error: 'Attendance session has ended or is not active', code: 'SESSION_CLOSED' };
+    }
+
+    if (session.mode !== 'CODE') {
+      return { success: false, error: 'Session is not in Attendance Code mode', code: 'INVALID_CREDENTIAL' };
+    }
+
+    const rot = generateRotatingCode(session.id, session.session_secret);
+    return {
+      code: rot.code,
+      secondsRemaining: rot.secondsRemaining,
+      rotationInterval: rot.rotationInterval
+    };
+  }
+
+  // ==========================================
+  // Regenerate Attendance Code (Deprecated/Manual fallback)
   // ==========================================
   static async regenerateCode(
     teacherId: string,
@@ -277,13 +333,13 @@ export class AttendanceService {
       return { success: false, error: 'Session is not in Attendance Code mode', code: 'INVALID_CREDENTIAL' };
     }
 
-    const newCode = generateStableCode();
+    const rot = generateRotatingCode(session.id, session.session_secret);
     await db.execute(
       `UPDATE attendance_sessions SET current_code = $1 WHERE id = $2`,
-      [newCode, sessionId]
+      [rot.code, sessionId]
     );
 
-    return { success: true, code: newCode };
+    return { success: true, code: rot.code };
   }
 
   // ==========================================
@@ -363,17 +419,64 @@ export class AttendanceService {
         return { success: false, error: 'Attendance code is required', code: 'INVALID_CODE' };
       }
 
-      session = await db.queryOne<any>(
+      if (!/^[0-9]{6}$/.test(cleanCode)) {
+        return { success: false, error: 'Invalid or inactive classroom attendance code', code: 'INVALID_CODE' };
+      }
+
+      // Query all ACTIVE sessions in CODE mode
+      const activeSessions = await db.query<any>(
         `SELECT s.*, c.name as class_name, c.course
          FROM attendance_sessions s
          JOIN classes c ON s.class_id = c.id
-         WHERE s.status = 'ACTIVE' AND s.mode = 'CODE' AND s.current_code = $1`,
-        [cleanCode]
+         WHERE s.status = 'ACTIVE' AND s.mode = 'CODE'`
       );
 
-      if (!session) {
+      const nowMs = Date.now();
+      const codeMatchingSessions: any[] = [];
+
+      for (const s of activeSessions) {
+        const val = verifyRotatingCode(cleanCode, s.id, s.session_secret, nowMs);
+        if (val.valid) {
+          codeMatchingSessions.push(s);
+        }
+      }
+
+      if (codeMatchingSessions.length === 0) {
         return { success: false, error: 'Invalid or inactive classroom attendance code', code: 'INVALID_CODE' };
       }
+
+      // Check enrollment eligibility for each matched session
+      const eligibleSessions: any[] = [];
+      for (const s of codeMatchingSessions) {
+        const enrollment = await db.queryOne(
+          `SELECT id FROM class_enrollments WHERE class_id = $1 AND student_id = $2 AND status = 'ACTIVE'`,
+          [s.class_id, student.id]
+        );
+        if (enrollment) {
+          eligibleSessions.push(s);
+        }
+      }
+
+      if (eligibleSessions.length === 0) {
+        // Not enrolled in the matched session
+        const firstMatch = codeMatchingSessions[0];
+        return {
+          success: false,
+          error: `Student ${student.name} (${cleanEnr}) is not enrolled in ${firstMatch.class_name} (${firstMatch.course})`,
+          code: 'STUDENT_NOT_ELIGIBLE'
+        };
+      }
+
+      if (eligibleSessions.length > 1) {
+        // Collision: student is enrolled in multiple active classes that derived identical code
+        return {
+          success: false,
+          error: 'Ambiguous classroom attendance code across multiple active enrolled classes',
+          code: 'AMBIGUOUS_CODE'
+        };
+      }
+
+      session = eligibleSessions[0];
     } else if (params.mode === 'DYNAMIC_QR') {
       const qrToken = (params.qrToken || '').trim();
       if (!qrToken) {

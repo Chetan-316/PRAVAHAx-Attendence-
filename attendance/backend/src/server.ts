@@ -9,6 +9,8 @@ import {
   verifyPassword,
   generateDynamicQrToken,
   verifyDynamicQrToken,
+  generateRotatingCode,
+  verifyRotatingCode,
   signTeacherSession
 } from '../../frontend/api/_lib/crypto';
 import { db } from '../../frontend/api/_lib/db';
@@ -31,6 +33,8 @@ export {
   CONFIG,
   hashPassword,
   verifyPassword,
+  generateRotatingCode,
+  verifyRotatingCode,
   generateDynamicQrToken,
   verifyDynamicQrToken,
   signTeacherSession,

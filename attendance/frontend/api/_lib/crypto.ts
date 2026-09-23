@@ -4,8 +4,11 @@ import { TeacherSessionPayload } from './types.js';
 export const CONFIG = {
   QR_ROTATION_SECONDS: parseInt(process.env.QR_ROTATION_SECONDS || process.env.QR_ROTATION_INTERVAL_SECONDS || '4', 10),
   QR_TOLERANCE_SECONDS: parseInt(process.env.QR_TOLERANCE_SECONDS || '2', 10),
+  CODE_ROTATION_SECONDS: parseInt(process.env.CODE_ROTATION_SECONDS || process.env.CODE_ROTATION_INTERVAL_SECONDS || '4', 10),
+  CODE_TOLERANCE_SECONDS: parseInt(process.env.CODE_TOLERANCE_SECONDS || '2', 10),
   JWT_SECRET: process.env.JWT_SECRET || process.env.AUTH_SECRET || 'pravahax-prod-secret-fallback-key-for-local-dev-only-316',
   QR_SIGNING_SECRET: process.env.QR_SIGNING_SECRET || 'pravahax-qr-signing-key-for-local-dev-only-316',
+  CODE_SIGNING_SECRET: process.env.CODE_SIGNING_SECRET || 'pravahax-code-signing-key-for-local-dev-only-316',
   COOKIE_NAME: 'pravahax_teacher_session',
   SESSION_DURATION_SECONDS: 8 * 3600 // 8 hours
 };
@@ -30,9 +33,97 @@ export function verifyPassword(password: string, storedHash: string): boolean {
 }
 
 // ==========================================
-// 2. Cryptographic Stable 6-Digit Code
+// 2. Deterministic 4-Second Rotating Attendance Code
 // ==========================================
 
+export function getCodeWindowNumber(timestampMs: number = Date.now()): number {
+  return Math.floor(timestampMs / (CONFIG.CODE_ROTATION_SECONDS * 1000));
+}
+
+export function generateRotatingCode(
+  sessionId: string,
+  sessionSecret: string,
+  timestampMs: number = Date.now()
+): {
+  code: string;
+  windowNumber: number;
+  secondsRemaining: number;
+  rotationInterval: number;
+} {
+  const windowNumber = getCodeWindowNumber(timestampMs);
+  const input = `v1|code|${sessionId}|${windowNumber}`;
+  const key = `${CONFIG.CODE_SIGNING_SECRET}:${sessionSecret}`;
+  const hash = crypto.createHmac('sha256', key).update(input).digest();
+
+  // Dynamic truncation (RFC 4226 TOTP standard)
+  const offset = hash[hash.length - 1] & 0x0f;
+  const binary =
+    ((hash[offset] & 0x7f) << 24) |
+    ((hash[offset + 1] & 0xff) << 16) |
+    ((hash[offset + 2] & 0xff) << 8) |
+    (hash[offset + 3] & 0xff);
+
+  const num = binary % 1000000;
+  const code = num.toString().padStart(6, '0');
+
+  const windowStartMs = windowNumber * CONFIG.CODE_ROTATION_SECONDS * 1000;
+  const elapsedMs = timestampMs - windowStartMs;
+  const remainingMs = Math.max(0, (CONFIG.CODE_ROTATION_SECONDS * 1000) - elapsedMs);
+  const secondsRemaining = parseFloat((remainingMs / 1000).toFixed(1));
+
+  return {
+    code,
+    windowNumber,
+    secondsRemaining,
+    rotationInterval: CONFIG.CODE_ROTATION_SECONDS
+  };
+}
+
+export interface CodeValidationResult {
+  valid: boolean;
+  code?: 'INVALID_CODE' | 'CODE_EXPIRED';
+  windowNumber?: number;
+}
+
+export function verifyRotatingCode(
+  submittedCode: string,
+  sessionId: string,
+  sessionSecret: string,
+  serverTimeMs: number = Date.now()
+): CodeValidationResult {
+  if (!submittedCode || typeof submittedCode !== 'string') {
+    return { valid: false, code: 'INVALID_CODE' };
+  }
+
+  const cleanCode = submittedCode.trim();
+  if (!/^[0-9]{6}$/.test(cleanCode)) {
+    return { valid: false, code: 'INVALID_CODE' };
+  }
+
+  const currentWindow = getCodeWindowNumber(serverTimeMs);
+  const currentCodeObj = generateRotatingCode(sessionId, sessionSecret, serverTimeMs);
+
+  // Check current window
+  if (crypto.timingSafeEqual(Buffer.from(cleanCode), Buffer.from(currentCodeObj.code))) {
+    return { valid: true, windowNumber: currentWindow };
+  }
+
+  // Check immediately previous window within tolerance
+  const currentWindowStartMs = currentWindow * CONFIG.CODE_ROTATION_SECONDS * 1000;
+  const msIntoCurrentWindow = serverTimeMs - currentWindowStartMs;
+
+  if (msIntoCurrentWindow <= CONFIG.CODE_TOLERANCE_SECONDS * 1000) {
+    const priorWindowMs = (currentWindow - 1) * CONFIG.CODE_ROTATION_SECONDS * 1000;
+    const priorCodeObj = generateRotatingCode(sessionId, sessionSecret, priorWindowMs);
+    if (crypto.timingSafeEqual(Buffer.from(cleanCode), Buffer.from(priorCodeObj.code))) {
+      return { valid: true, windowNumber: currentWindow - 1 };
+    }
+  }
+
+  return { valid: false, code: 'INVALID_CODE' };
+}
+
+// Retained for backward-compatibility if referenced
 export function generateStableCode(): string {
   return crypto.randomInt(100000, 1000000).toString();
 }

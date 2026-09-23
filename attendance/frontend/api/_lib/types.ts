@@ -77,6 +77,7 @@ export type ErrorCode =
   | 'STUDENT_NOT_ELIGIBLE'
   | 'ALREADY_MARKED'
   | 'ACTIVE_SESSION_EXISTS'
+  | 'AMBIGUOUS_CODE'
   | 'INTERNAL_ERROR';
 
 export interface ApiErrorResponse {

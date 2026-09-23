@@ -191,6 +191,27 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ...result, qrToken: (result as any).token });
     }
 
+    // GET /api/session/code (Teacher-only on-demand rotating code fetch)
+    if (pathname === '/api/session/code') {
+      const teacher = extractTeacherAuth(req);
+      if (!teacher) {
+        return res.status(401).json({ success: false, error: 'Teacher authentication required', code: 'UNAUTHORIZED' });
+      }
+      const sessionId = url.searchParams.get('sessionId') || url.searchParams.get('session_id') || body.sessionId || body.session_id;
+      if (!sessionId) {
+        return res.status(400).json({ success: false, error: 'Session ID is required' });
+      }
+
+      const result = await AttendanceService.getRotatingCode(teacher.id, sessionId);
+      if ('error' in result) {
+        const statusCode =
+          result.code === 'FORBIDDEN' ? 403 :
+          result.code === 'SESSION_CLOSED' ? 404 : 400;
+        return res.status(statusCode).json(result);
+      }
+      return res.status(200).json(result);
+    }
+
     // POST /api/session/regenerate-code
     if (pathname === '/api/session/regenerate-code') {
       if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });

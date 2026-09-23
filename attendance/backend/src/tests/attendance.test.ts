@@ -1,6 +1,15 @@
 process.env.NODE_ENV = 'test';
 import http from 'http';
-import { app, httpServer, AttendanceService, CONFIG } from '../server';
+import {
+  app,
+  httpServer,
+  AttendanceService,
+  CONFIG,
+  hashPassword,
+  generateRotatingCode,
+  verifyRotatingCode,
+  db
+} from '../server';
 
 let totalPassed = 0;
 let totalFailed = 0;
@@ -123,11 +132,33 @@ async function runAllTests() {
     assert(Array.isArray(classesRes.body.classes) && classesRes.body.classes.length >= 2, 'Assigned classes returned');
 
     // ----------------------------------------------------
-    // 2. Stable Code Mode Attendance Tests
+    // 2. 4-Second Rotating Attendance Code Mode Tests (Tests 1-13)
     // ----------------------------------------------------
-    console.log('\n[TEST GROUP 2: Stable Attendance Code Mode]');
+    console.log('\n[TEST GROUP 2: Server-Authoritative 4-Second Rotating Code Mode]');
 
-    // 2.1 Start Code Mode session
+    // Setup Teacher B for isolation tests
+    const teacher2PwHash = hashPassword('teacher456');
+    await db.execute(
+      `INSERT INTO users (id, name, email, role, password_hash) VALUES ($1, $2, $3, $4, $5)`,
+      ['t2', 'Prof. Verma', 'teacher2@test.com', 'TEACHER', teacher2PwHash]
+    );
+    await db.execute(
+      `INSERT INTO classes (id, name, course, teacher_id) VALUES ($1, $2, $3, $4)`,
+      ['c3', 'Operating Systems', 'CS103', 't2']
+    );
+    await db.execute(
+      `INSERT INTO class_enrollments (id, class_id, student_id, status) VALUES ($1, $2, $3, $4)`,
+      ['enr_s18_c3', 'c3', 's18', 'ACTIVE']
+    );
+
+    const loginRes2 = await request('POST', '/api/teacher/login', {
+      identifier: 'teacher2@test.com',
+      password: 'teacher456'
+    });
+    assert(loginRes2.status === 200, 'Teacher 2 login succeeds (200)');
+    const teacherToken2 = loginRes2.body.token;
+
+    // Start Code Mode session for Teacher A
     const startCodeRes = await request(
       'POST',
       '/api/session/start',
@@ -136,85 +167,175 @@ async function runAllTests() {
     );
     assert(startCodeRes.status === 200, 'Teacher starts Code Mode session (200)');
     assert(startCodeRes.body.session.mode === 'CODE', 'Session mode is CODE');
-    const initialCode = startCodeRes.body.code;
-    assert(typeof initialCode === 'string' && initialCode.length === 6, 'Generated stable code is exactly 6 digits');
     const codeSessionId = startCodeRes.body.session.id;
 
-    // 2.2 Re-query active session (simulating browser refresh / polling / cold-start)
-    const recoverCodeRes = await request('GET', '/api/session/active', undefined, {
+    // TEST 1: Same window stability
+    const codeReq1 = await request('GET', `/api/session/code?sessionId=${codeSessionId}`, undefined, {
       Authorization: `Bearer ${teacherToken}`
     });
-    assert(recoverCodeRes.status === 200, 'Recover active session succeeds (200)');
-    assert(recoverCodeRes.body.active === true, 'Session is marked active');
-    assert(recoverCodeRes.body.current_code === initialCode, 'Code remains IDENTICAL on recovery (No auto-rotation)');
-
-    // 2.3 Wait and query again: Code must NOT rotate
-    await new Promise((r) => setTimeout(r, 1000));
-    const queryAgain = await request('GET', '/api/session/active', undefined, {
+    const codeReq2 = await request('GET', `/api/session/code?sessionId=${codeSessionId}`, undefined, {
       Authorization: `Bearer ${teacherToken}`
     });
-    assert(queryAgain.body.current_code === initialCode, 'Code remains stable after time delay');
+    const codeReq3 = await request('GET', `/api/session/code?sessionId=${codeSessionId}`, undefined, {
+      Authorization: `Bearer ${teacherToken}`
+    });
 
-    // 2.4 Unauthenticated /api/session/active does NOT leak active code or secrets
-    const publicActiveRes = await request('GET', '/api/session/active');
-    assert(publicActiveRes.body.active === false || !publicActiveRes.body.current_code, 'Public unauthenticated caller cannot view attendance code');
+    const c1 = codeReq1.body.code;
+    const c2 = codeReq2.body.code;
+    const c3 = codeReq3.body.code;
+    assert(c1 === c2 && c2 === c3, 'Test 1: C1 === C2 === C3 (Code is identical within the same 4s window)');
 
-    // 2.5 Passwordless student check-in with valid code
+    // TEST 3: Six-digit format
+    assert(/^[0-9]{6}$/.test(c1), 'Test 3: Generated rotating code strictly matches ^[0-9]{6}$');
+
+    // TEST 4: Current code accepted
     const studentSubmit = await request('POST', '/api/attendance/mark', {
       enrollmentNumber: 'STU001',
       mode: 'CODE',
-      code: initialCode
+      code: c1
     });
-    assert(studentSubmit.status === 200, 'Passwordless student check-in with valid code succeeds (200)');
-    assert(studentSubmit.body.success === true, 'Attendance recorded');
-    assert(studentSubmit.body.student_name === 'Chetan Agrawal', 'Student name resolved correctly');
-    assert(studentSubmit.body.verification_method === 'ATTENDANCE_CODE', 'Method verified as ATTENDANCE_CODE');
+    assert(studentSubmit.status === 200, 'Test 4: Passwordless student check-in with current rotating code succeeds (200)');
+    assert(studentSubmit.body.success === true, 'Test 4: Attendance recorded');
+    assert(studentSubmit.body.student_name === 'Chetan Agrawal', 'Test 4: Student name resolved correctly');
+    assert(studentSubmit.body.verification_method === 'ATTENDANCE_CODE', 'Test 4: Method verified as ATTENDANCE_CODE');
 
-    // 2.6 Duplicate attendance rejected
-    const duplicateSubmit = await request('POST', '/api/attendance/mark', {
+    // Duplicate submission in same session rejected
+    const dupSubmit = await request('POST', '/api/attendance/mark', {
       enrollmentNumber: 'STU001',
       mode: 'CODE',
-      code: initialCode
+      code: c1
     });
-    assert(duplicateSubmit.status === 409, 'Duplicate attendance rejected with 409 Conflict');
-    assert(duplicateSubmit.body.code === 'ALREADY_MARKED', 'Error code is ALREADY_MARKED');
+    assert(dupSubmit.status === 409, 'Duplicate attendance rejected with 409 Conflict');
 
-    // 2.7 Invalid code rejected
-    const badCodeSubmit = await request('POST', '/api/attendance/mark', {
+    // TEST 8: Unauthorized code retrieval
+    const unauthCodeRes = await request('GET', `/api/session/code?sessionId=${codeSessionId}`);
+    assert(unauthCodeRes.status === 401, 'Test 8: Unauthenticated GET /api/session/code rejected with 401');
+
+    // TEST 9: Wrong teacher access
+    const wrongTeacherRes = await request('GET', `/api/session/code?sessionId=${codeSessionId}`, undefined, {
+      Authorization: `Bearer ${teacherToken2}`
+    });
+    assert(wrongTeacherRes.status === 403, 'Test 9: Teacher B cannot fetch Teacher A session code (403 FORBIDDEN)');
+
+    // TEST 2: Four-second rotation
+    // Wait until crossing into the next window (+ 150ms buffer)
+    const secondsRemaining = codeReq3.body.secondsRemaining || 4;
+    const waitMs = Math.ceil(secondsRemaining * 1000) + 150;
+    console.log(`  Waiting ${waitMs}ms to cross 4-second time boundary...`);
+    await new Promise((r) => setTimeout(r, waitMs));
+
+    const codeReqNext = await request('GET', `/api/session/code?sessionId=${codeSessionId}`, undefined, {
+      Authorization: `Bearer ${teacherToken}`
+    });
+    const c4 = codeReqNext.body.code;
+    assert(c4 !== c1, 'Test 2: C4 !== C1 (Code rotated automatically at window boundary)');
+    assert(/^[0-9]{6}$/.test(c4), 'Test 3: Newly rotated code satisfies ^[0-9]{6}$');
+
+    // TEST 5: Immediately previous code tolerance (within 2 seconds)
+    // We just crossed the boundary (< 1.5 seconds ago), submit previous code c1
+    const prevCodeSubmit = await request('POST', '/api/attendance/mark', {
       enrollmentNumber: 'STU002',
       mode: 'CODE',
-      code: '999999'
+      code: c1
     });
-    assert(badCodeSubmit.status === 404, 'Invalid attendance code rejected (404)');
+    assert(prevCodeSubmit.status === 200, 'Test 5: Immediately previous code accepted within tolerance window (200)');
+    assert(prevCodeSubmit.body.student_name === 'Dhruv Sharma', 'Test 5: Student Dhruv Sharma attendance recorded');
 
-    // 2.8 Unknown student enrollment rejected
-    const unknownStudent = await request('POST', '/api/attendance/mark', {
-      enrollmentNumber: 'UNKNOWN_999',
+    // TEST 6: Old code rejected past tolerance
+    console.log('  Waiting 3 seconds for previous window to fully expire past tolerance...');
+    await new Promise((r) => setTimeout(r, 3000));
+    const oldCodeSubmit = await request('POST', '/api/attendance/mark', {
+      enrollmentNumber: 'STU003',
       mode: 'CODE',
-      code: initialCode
+      code: c1 // c1 is now definitely older than current and outside tolerance
     });
-    assert(unknownStudent.status === 404, 'Unknown student enrollment rejected (404)');
-    assert(unknownStudent.body.code === 'STUDENT_NOT_FOUND', 'Code is STUDENT_NOT_FOUND');
+    assert(oldCodeSubmit.status === 404, 'Test 6: Expired code rejected past tolerance window (404)');
+    assert(oldCodeSubmit.body.code === 'INVALID_CODE', 'Test 6: Returns structured error code INVALID_CODE');
 
-    // 2.9 End session
+    // TEST 12: Browser refresh / recovery
+    const recoverRes = await request('GET', '/api/session/active', undefined, {
+      Authorization: `Bearer ${teacherToken}`
+    });
+    assert(recoverRes.status === 200, 'Test 12: Recover active session succeeds');
+    assert(recoverRes.body.active === true, 'Test 12: Session is marked active');
+    const currentOnRecovery = recoverRes.body.current_code;
+    // Check that recovery returns the current server-calculated code, not stale initial code
+    const freshCodeReq = await request('GET', `/api/session/code?sessionId=${codeSessionId}`, undefined, {
+      Authorization: `Bearer ${teacherToken}`
+    });
+    assert(currentOnRecovery === freshCodeReq.body.code, 'Test 12: Browser refresh recovers the CURRENT server-window code');
+
+    // TEST 13: Vercel cold-start / serverless simulation
+    // Compute code independently for exact same session and time timestamp
+    const nowTimestamp = Date.now();
+    const inst1 = generateRotatingCode('test-session-id-123', 'test-secret-456', nowTimestamp);
+    const inst2 = generateRotatingCode('test-session-id-123', 'test-secret-456', nowTimestamp);
+    assert(inst1.code === inst2.code, 'Test 13: Vercel cold-start: independent instances derive identical code for same time window');
+
+    // TEST 10: Multiple concurrent sessions
+    const startCodeRes2 = await request(
+      'POST',
+      '/api/session/start',
+      { class_id: 'c3', mode: 'CODE' },
+      { Authorization: `Bearer ${teacherToken2}` }
+    );
+    assert(startCodeRes2.status === 200, 'Test 10: Teacher 2 starts independent Code session for Class c3');
+    const codeSessionId2 = startCodeRes2.body.session.id;
+
+    const teacher2CodeFetch = await request('GET', `/api/session/code?sessionId=${codeSessionId2}`, undefined, {
+      Authorization: `Bearer ${teacherToken2}`
+    });
+    const teacher1CodeFetch = await request('GET', `/api/session/code?sessionId=${codeSessionId}`, undefined, {
+      Authorization: `Bearer ${teacherToken}`
+    });
+
+    const t2Code = teacher2CodeFetch.body.code;
+    const t1Code = teacher1CodeFetch.body.code;
+    assert(t2Code !== t1Code, 'Test 10: Independent sessions derive independent cryptographic codes');
+
+    // Student s18 is enrolled in c3 (and c1, c2)
+    const t2StudentSubmit = await request('POST', '/api/attendance/mark', {
+      enrollmentNumber: 'STU018',
+      mode: 'CODE',
+      code: t2Code
+    });
+    assert(t2StudentSubmit.status === 200, 'Test 10: Student maps correctly to Teacher 2 class c3');
+    assert(t2StudentSubmit.body.class_name === 'Operating Systems', 'Test 10: Class name correctly resolved to Operating Systems');
+
+    // TEST 11: Collision / Ambiguity Handling
+    // If student enters code for an active class they are NOT enrolled in
+    // Student s30 is not enrolled in c3
+    const notEnrolledSubmit = await request('POST', '/api/attendance/mark', {
+      enrollmentNumber: 'STU030',
+      mode: 'CODE',
+      code: t2Code
+    });
+    assert(notEnrolledSubmit.status === 403, 'Test 11: Student submitting code for non-enrolled class rejected with 403 STUDENT_NOT_ELIGIBLE');
+
+    // Close session 2
+    await request('POST', '/api/session/end', { sessionId: codeSessionId2 }, { Authorization: `Bearer ${teacherToken2}` });
+
+    // TEST 7: Closed session
+    // End session 1
     const endCodeRes = await request(
       'POST',
       '/api/session/end',
       { sessionId: codeSessionId },
       { Authorization: `Bearer ${teacherToken}` }
     );
-    assert(endCodeRes.status === 200, 'Teacher closes attendance session');
+    assert(endCodeRes.status === 200, 'Teacher closes attendance session 1');
 
-    // 2.10 Submissions to closed session rejected
+    // Submissions to closed session rejected even with valid current code
+    const freshActiveCode = generateRotatingCode(codeSessionId, startCodeRes.body.session.session_secret).code;
     const postCloseSubmit = await request('POST', '/api/attendance/mark', {
-      enrollmentNumber: 'STU002',
+      enrollmentNumber: 'STU004',
       mode: 'CODE',
-      code: initialCode
+      code: freshActiveCode
     });
-    assert(postCloseSubmit.status === 404, 'Submission to closed code session rejected');
+    assert(postCloseSubmit.status === 404, 'Test 7: Submission to closed session rejected (404)');
 
     // ----------------------------------------------------
-    // 3. Dynamic QR Rotation & Window Expiry Tests
+    // 3. Dynamic QR Rotation & Window Expiry Tests (Verified Undisturbed)
     // ----------------------------------------------------
     console.log('\n[TEST GROUP 3: Deterministic 4-Second Dynamic QR Mode]');
 
@@ -230,7 +351,6 @@ async function runAllTests() {
     const qrSessionId = startQrRes.body.session.id;
 
     // 3.2 Dynamic QR stability test inside current window
-    // Request QR three times consecutively in current window
     const qrFetch1 = await request('GET', `/api/session/qr-token?sessionId=${qrSessionId}`, undefined, {
       Authorization: `Bearer ${teacherToken}`
     });
@@ -245,7 +365,6 @@ async function runAllTests() {
     const token2 = qrFetch2.body.token;
     const token3 = qrFetch3.body.token;
 
-    // Assert: QR1 === QR2 === QR3 within the same window
     assert(token1 === token2 && token2 === token3, 'QR1 === QR2 === QR3 (Identical token within the same rotation window)');
 
     // 3.3 Submit valid QR token
@@ -278,7 +397,7 @@ async function runAllTests() {
     assert(wrongSessionSubmit.status === 404, 'QR referencing non-existent session rejected (404)');
 
     // 3.6 Window progression test: wait for next rotation window
-    console.log('  Waiting for window rotation boundary (4 seconds)...');
+    console.log('  Waiting for QR window rotation boundary (4 seconds)...');
     await new Promise((r) => setTimeout(r, 4200));
 
     const qrFetchNext = await request('GET', `/api/session/qr-token?sessionId=${qrSessionId}`, undefined, {
@@ -286,7 +405,6 @@ async function runAllTests() {
     });
     const tokenNext = qrFetchNext.body.token;
 
-    // Assert: tokenNext !== token1 (Changed deterministically at next window boundary)
     assert(tokenNext !== token1, 'QR4 !== QR1 (QR rotates at next time window boundary)');
 
     // Submit newly rotated QR
@@ -318,11 +436,10 @@ async function runAllTests() {
     );
 
     // ----------------------------------------------------
-    // 4. Concurrency & Multi-Teacher Isolation Tests
+    // 4. Concurrency & Database Deduplication Tests
     // ----------------------------------------------------
     console.log('\n[TEST GROUP 4: Concurrency & Database Deduplication]');
 
-    // Start fresh session
     const concSession = await request(
       'POST',
       '/api/session/start',

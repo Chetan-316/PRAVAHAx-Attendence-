@@ -18,6 +18,11 @@ interface ActiveSessionData {
   class_name: string;
   course: string;
   current_code?: string;
+  codeInfo?: {
+    code: string;
+    secondsRemaining: number;
+    rotationInterval: number;
+  };
   qr?: {
     token: string;
     secondsRemaining: number;
@@ -34,16 +39,15 @@ export const TeacherDashboard: React.FC = () => {
 
   const [showModeModal, setShowModeModal] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
-  const [showRegenConfirm, setShowRegenConfirm] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [startingSession, setStartingSession] = useState(false);
   const [endingSession, setEndingSession] = useState(false);
-  const [regeneratingCode, setRegeneratingCode] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
   const activePollTimerRef = useRef<NodeJS.Timeout | null>(null);
   const qrPollTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const codePollTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // 1. Fetch Classes & Recover Active Session on Mount
   const loadDashboardData = useCallback(async () => {
@@ -64,6 +68,7 @@ export const TeacherDashboard: React.FC = () => {
         setActiveSession({
           ...sessionData.session,
           current_code: sessionData.current_code,
+          codeInfo: sessionData.codeInfo,
           qr: sessionData.qr
         });
         setAttendees(sessionData.attendees || []);
@@ -95,8 +100,8 @@ export const TeacherDashboard: React.FC = () => {
         if (res.ok && data.active && data.session) {
           setAttendees(data.attendees || []);
           setTotalEnrolled(data.totalEnrolled || 0);
-          if (data.current_code) {
-            setActiveSession((prev) => (prev ? { ...prev, current_code: data.current_code } : null));
+          if (data.current_code && activeSession.mode === 'CODE') {
+            setActiveSession((prev) => (prev ? { ...prev, current_code: data.current_code, codeInfo: data.codeInfo || prev.codeInfo } : null));
           }
         }
       } catch (err) {
@@ -108,9 +113,9 @@ export const TeacherDashboard: React.FC = () => {
     return () => {
       if (activePollTimerRef.current) clearInterval(activePollTimerRef.current);
     };
-  }, [activeSession?.id]);
+  }, [activeSession?.id, activeSession?.mode]);
 
-  // 3. Poll Dynamic QR Token (every 3.8 - 4 seconds)
+  // 3a. Poll Dynamic QR Token (every 3.8 - 4 seconds)
   useEffect(() => {
     if (!activeSession || activeSession.mode !== 'DYNAMIC_QR') {
       if (qrPollTimerRef.current) clearInterval(qrPollTimerRef.current);
@@ -148,6 +153,60 @@ export const TeacherDashboard: React.FC = () => {
     };
   }, [activeSession?.id, activeSession?.mode]);
 
+  // 3b. Fetch Rotating Code synchronized with server window boundary
+  useEffect(() => {
+    if (!activeSession || activeSession.mode !== 'CODE') {
+      if (codePollTimerRef.current) clearTimeout(codePollTimerRef.current);
+      return;
+    }
+
+    let isSubscribed = true;
+
+    const fetchNextCode = async () => {
+      try {
+        const res = await fetch(`/api/session/code?sessionId=${activeSession.id}`, {
+          credentials: 'include'
+        });
+        const data = await res.json();
+        if (res.ok && data.code && isSubscribed) {
+          setActiveSession((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  current_code: data.code,
+                  codeInfo: {
+                    code: data.code,
+                    secondsRemaining: data.secondsRemaining,
+                    rotationInterval: data.rotationInterval
+                  }
+                }
+              : null
+          );
+
+          // Synchronize to next server boundary (+ 60ms buffer to safely step into next window)
+          const delayMs = Math.max(200, Math.floor(data.secondsRemaining * 1000) + 60);
+          codePollTimerRef.current = setTimeout(fetchNextCode, delayMs);
+        }
+      } catch (err) {
+        console.warn('Rotating code fetch error:', err);
+        if (isSubscribed) {
+          codePollTimerRef.current = setTimeout(fetchNextCode, 2000);
+        }
+      }
+    };
+
+    const initialDelayMs = Math.max(
+      100,
+      Math.floor((activeSession.codeInfo?.secondsRemaining ?? 4) * 1000) + 60
+    );
+    codePollTimerRef.current = setTimeout(fetchNextCode, initialDelayMs);
+
+    return () => {
+      isSubscribed = false;
+      if (codePollTimerRef.current) clearTimeout(codePollTimerRef.current);
+    };
+  }, [activeSession?.id, activeSession?.mode]);
+
   // 4. Start Attendance Session
   const handleStartSession = async (mode: 'DYNAMIC_QR' | 'CODE') => {
     if (!selectedClassId) return;
@@ -174,11 +233,12 @@ export const TeacherDashboard: React.FC = () => {
         class_name: selectedClass ? selectedClass.name : '',
         course: selectedClass ? selectedClass.course : '',
         current_code: data.code,
+        codeInfo: data.codeInfo,
         qr: data.qr
       });
       setAttendees([]);
       setShowModeModal(false);
-      setStatusMsg({ type: 'success', text: `Attendance session started in ${mode === 'DYNAMIC_QR' ? 'Dynamic QR' : 'Code'} mode.` });
+      setStatusMsg({ type: 'success', text: `Attendance session started in ${mode === 'DYNAMIC_QR' ? 'Dynamic QR' : 'Rotating Code'} mode.` });
     } catch {
       setStatusMsg({ type: 'error', text: 'Error starting attendance session.' });
     } finally {
@@ -186,35 +246,7 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // 5. Regenerate Attendance Code
-  const handleRegenerateCode = async () => {
-    if (!activeSession) return;
-    setRegeneratingCode(true);
-
-    try {
-      const res = await fetch('/api/session/regenerate-code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ sessionId: activeSession.id })
-      });
-
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setActiveSession((prev) => (prev ? { ...prev, current_code: data.code } : null));
-        setShowRegenConfirm(false);
-        setStatusMsg({ type: 'success', text: 'New 6-digit classroom code issued.' });
-      } else {
-        setStatusMsg({ type: 'error', text: data.error || 'Failed to regenerate code.' });
-      }
-    } catch {
-      setStatusMsg({ type: 'error', text: 'Error regenerating code.' });
-    } finally {
-      setRegeneratingCode(false);
-    }
-  };
-
-  // 6. End Attendance Session
+  // 5. End Attendance Session
   const handleEndSession = async () => {
     if (!activeSession) return;
     setEndingSession(true);
@@ -291,7 +323,7 @@ export const TeacherDashboard: React.FC = () => {
                   <span>{selectedClass.course} &bull; {selectedClass.name}</span>
                 </div>
                 <p className="mt-1 text-slate-500 dark:text-slate-400">
-                  Ready to start. Choose between Dynamic QR or a Stable 6-digit Code.
+                  Ready to start. Choose between Dynamic QR or 4-Second Rotating Classroom Code.
                 </p>
               </div>
             )}
@@ -341,8 +373,8 @@ export const TeacherDashboard: React.FC = () => {
             ) : (
               <AttendanceCodePanel
                 code={activeSession.current_code || ''}
-                onRegenerateCode={() => setShowRegenConfirm(true)}
-                regenerating={regeneratingCode}
+                secondsRemaining={activeSession.codeInfo?.secondsRemaining || 4}
+                rotationInterval={activeSession.codeInfo?.rotationInterval || 4}
               />
             )}
 
@@ -377,15 +409,6 @@ export const TeacherDashboard: React.FC = () => {
         isDestructive={true}
         onConfirm={handleEndSession}
         onCancel={() => setShowEndConfirm(false)}
-      />
-
-      <ConfirmDialog
-        isOpen={showRegenConfirm}
-        title="Regenerate Classroom Code?"
-        message="This will immediately issue a new 6-digit code. The previous code will no longer be accepted."
-        confirmLabel="Regenerate"
-        onConfirm={handleRegenerateCode}
-        onCancel={() => setShowRegenConfirm(false)}
       />
     </div>
   );

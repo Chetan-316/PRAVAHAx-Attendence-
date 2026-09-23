@@ -270,7 +270,12 @@ class MemoryRelationalAdapter implements DatabaseAdapter {
     // SELECT user by email or student_id
     if (cleanSql.includes('FROM USERS')) {
       const allUsers = Array.from(this.users.values());
-      if (cleanSql.includes('WHERE EMAIL =') || cleanSql.includes('WHERE (EMAIL =') || cleanSql.includes('WHERE (EMAIL = $1 OR ID = $1)')) {
+      if (
+        cleanSql.includes('WHERE EMAIL =') ||
+        cleanSql.includes('WHERE (EMAIL =') ||
+        cleanSql.includes('WHERE (EMAIL = $1 OR ID = $1)') ||
+        cleanSql.includes('LOWER(EMAIL) = $1')
+      ) {
         const val = (params[0] || '').toLowerCase();
         return allUsers.filter(u => u.email.toLowerCase() === val || u.id.toLowerCase() === val) as any;
       }
@@ -413,6 +418,49 @@ class MemoryRelationalAdapter implements DatabaseAdapter {
         const s = this.sessions.get(id);
         if (s) s.current_code = newCode;
       }
+      return;
+    }
+
+    // INSERT INTO users
+    if (cleanSql.startsWith('INSERT INTO USERS')) {
+      const id = params[0];
+      const name = params[1];
+      const email = params[2];
+      const role = params.length === 5 ? params[3] : 'TEACHER';
+      const password_hash = params[params.length - 1];
+      this.users.set(id, {
+        id,
+        name,
+        email,
+        role,
+        password_hash,
+        created_at: new Date().toISOString()
+      });
+      return;
+    }
+
+    // INSERT INTO classes
+    if (cleanSql.startsWith('INSERT INTO CLASSES')) {
+      const [id, name, course, teacher_id] = params;
+      this.classes.set(id, {
+        id,
+        name,
+        course,
+        teacher_id,
+        created_at: new Date().toISOString()
+      });
+      return;
+    }
+
+    // INSERT INTO class_enrollments
+    if (cleanSql.startsWith('INSERT INTO CLASS_ENROLLMENTS')) {
+      const [id, class_id, student_id, status] = params;
+      this.enrollments.set(`${class_id}_${student_id}`, {
+        id,
+        class_id,
+        student_id,
+        status: status || 'ACTIVE'
+      });
       return;
     }
 
