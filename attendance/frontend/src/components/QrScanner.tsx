@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
+import { SwitchCamera, AlertTriangle, RefreshCw, Loader2 } from 'lucide-react';
 
 interface QrScannerProps {
   onScanSuccess: (decodedText: string) => void;
@@ -8,41 +9,56 @@ interface QrScannerProps {
 
 export const QrScanner: React.FC<QrScannerProps> = ({ onScanSuccess, isScanningLocked }) => {
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [cameraStarted, setCameraStarted] = useState<boolean>(false);
   const [cameras, setCameras] = useState<any[]>([]);
   const [currentCameraIndex, setCurrentCameraIndex] = useState<number>(0);
+
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  const isLockedRef = useRef<boolean>(isScanningLocked);
   const scannerElementId = 'qr-reader-container';
 
-  const initScanner = async () => {
+  // Keep ref synchronized with current lock state to avoid stale closure in decode callback
+  useEffect(() => {
+    isLockedRef.current = isScanningLocked;
+  }, [isScanningLocked]);
+
+  // Clean stop helper
+  const stopScanner = useCallback(async () => {
+    if (scannerRef.current && scannerRef.current.isScanning) {
+      try {
+        await scannerRef.current.stop();
+      } catch (err) {
+        console.warn('Scanner stop error:', err);
+      }
+    }
+  }, []);
+
+  const initScanner = useCallback(async () => {
     try {
       setCameraError(null);
-      
+
+      await stopScanner();
+
       // Query available video devices
       const devices = await Html5Qrcode.getCameras().catch(() => []);
       let chosenIndex = 0;
       if (devices && devices.length > 0) {
         setCameras(devices);
-        // Automatically prefer the rear/environment camera on phones
-        const rearIdx = devices.findIndex((d: any) => 
-          d.label?.toLowerCase().includes('back') || 
-          d.label?.toLowerCase().includes('rear') ||
-          d.label?.toLowerCase().includes('environment')
-        );
+        // Automatically prefer the rear / environment camera on mobile
+        const rearIdx = devices.findIndex((d: any) => {
+          const lbl = (d.label || '').toLowerCase();
+          return lbl.includes('back') || lbl.includes('rear') || lbl.includes('environment');
+        });
         if (rearIdx !== -1) chosenIndex = rearIdx;
         setCurrentCameraIndex(chosenIndex);
-      }
-
-      if (scannerRef.current && scannerRef.current.isScanning) {
-        await scannerRef.current.stop().catch(() => {});
       }
 
       const html5QrCode = new Html5Qrcode(scannerElementId);
       scannerRef.current = html5QrCode;
 
-      const cameraConfig = devices && devices.length > 0 
-        ? { deviceId: { exact: devices[chosenIndex].id } }
-        : { facingMode: 'environment' };
+      const cameraConfig =
+        devices && devices.length > 0
+          ? { deviceId: { exact: devices[chosenIndex].id } }
+          : { facingMode: 'environment' };
 
       await html5QrCode.start(
         cameraConfig,
@@ -55,45 +71,57 @@ export const QrScanner: React.FC<QrScannerProps> = ({ onScanSuccess, isScanningL
           aspectRatio: 1.0
         },
         (decodedText) => {
-          if (!isScanningLocked) {
+          // Check authoritative latest lock state
+          if (!isLockedRef.current) {
+            isLockedRef.current = true; // immediately lock
+            // Stop scanning to release camera resources
+            html5QrCode.pause(true);
             onScanSuccess(decodedText);
           }
         },
         () => {}
       );
-
-      setCameraStarted(true);
     } catch (err: any) {
-      console.warn('Camera start error:', err);
-      if (err?.name === 'NotAllowedError' || err?.message?.includes('Permission') || err?.name === 'PermissionDeniedError') {
-        setCameraError('Camera permission denied. Please allow camera access in your browser address bar settings.');
+      console.warn('Camera initialization error:', err);
+      if (
+        err?.name === 'NotAllowedError' ||
+        err?.message?.includes('Permission') ||
+        err?.name === 'PermissionDeniedError'
+      ) {
+        setCameraError('Camera permission denied. Please allow camera access in your browser settings.');
       } else if (err?.name === 'NotFoundError' || err?.message?.includes('devices')) {
-        setCameraError('No camera detected on this device. You can still use the manual token fallback below.');
+        setCameraError('No camera detected on this device. Please inform your faculty.');
       } else {
-        setCameraError(err?.message || 'Unable to access camera. Please check camera permissions.');
+        setCameraError(err?.message || 'Unable to access camera. Please ensure HTTPS is enabled and permissions are granted.');
       }
     }
-  };
+  }, [onScanSuccess, stopScanner]);
 
   useEffect(() => {
     initScanner();
 
+    // Clean teardown on unmount
     return () => {
-      if (scannerRef.current && scannerRef.current.isScanning) {
-        scannerRef.current.stop().catch((e) => console.warn('Scanner stop error', e));
-      }
+      stopScanner().catch((e) => console.warn('Unmount stop error:', e));
     };
-  }, []);
+  }, [initScanner, stopScanner]);
 
-  const switchCamera = async () => {
+  // Handle resume scanning when lock released after error
+  useEffect(() => {
+    if (!isScanningLocked && scannerRef.current) {
+      try {
+        scannerRef.current.resume();
+      } catch {}
+    }
+  }, [isScanningLocked]);
+
+  const handleSwitchCamera = async () => {
     if (!cameras || cameras.length <= 1 || !scannerRef.current) return;
     const nextIndex = (currentCameraIndex + 1) % cameras.length;
     setCurrentCameraIndex(nextIndex);
 
     try {
-      if (scannerRef.current.isScanning) {
-        await scannerRef.current.stop();
-      }
+      await stopScanner();
       await scannerRef.current.start(
         { deviceId: { exact: cameras[nextIndex].id } },
         {
@@ -105,172 +133,66 @@ export const QrScanner: React.FC<QrScannerProps> = ({ onScanSuccess, isScanningL
           aspectRatio: 1.0
         },
         (decodedText) => {
-          if (!isScanningLocked) {
+          if (!isLockedRef.current) {
+            isLockedRef.current = true;
+            scannerRef.current?.pause(true);
             onScanSuccess(decodedText);
           }
         },
         () => {}
       );
     } catch (e) {
-      console.warn('Camera switch error', e);
+      console.warn('Camera switch error:', e);
     }
   };
 
   return (
-    <div style={{ marginTop: 10, textAlign: 'center', position: 'relative' }}>
-      <style>{`
-        #${scannerElementId} {
-          position: relative;
-          width: 100% !important;
-          max-width: 290px !important;
-          aspect-ratio: 1 / 1 !important;
-          margin: 0 auto !important;
-          border-radius: 18px !important;
-          overflow: hidden !important;
-          background: #0d1117 !important;
-          box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
-        }
-        #${scannerElementId} video {
-          object-fit: cover !important;
-          width: 100% !important;
-          height: 100% !important;
-          border-radius: 18px !important;
-        }
-        @keyframes laserSweep {
-          0% { top: 15%; opacity: 0.8; }
-          50% { top: 80%; opacity: 1; }
-          100% { top: 15%; opacity: 0.8; }
-        }
-        .scanner-laser-line {
-          position: absolute;
-          left: 10%;
-          width: 80%;
-          height: 2px;
-          background: linear-gradient(90deg, transparent, #00e676, #00c853, transparent);
-          box-shadow: 0 0 12px #00e676, 0 0 4px #b9f6ca;
-          animation: laserSweep 2s ease-in-out infinite;
-          pointer-events: none;
-          z-index: 10;
-        }
-        .scanner-corner {
-          position: absolute;
-          width: 28px;
-          height: 28px;
-          border-color: #00e676;
-          border-style: solid;
-          pointer-events: none;
-          z-index: 10;
-          box-shadow: 0 0 10px rgba(0, 230, 118, 0.5);
-        }
-        .top-left { top: 22px; left: 22px; border-width: 3px 0 0 3px; border-top-left-radius: 8px; }
-        .top-right { top: 22px; right: 22px; border-width: 3px 3px 0 0; border-top-right-radius: 8px; }
-        .bottom-left { bottom: 22px; left: 22px; border-width: 0 0 3px 3px; border-bottom-left-radius: 8px; }
-        .bottom-right { bottom: 22px; right: 22px; border-width: 0 3px 3px 0; border-bottom-right-radius: 8px; }
-      `}</style>
+    <div className="flex flex-col items-center">
+      <div className="relative mx-auto w-full max-w-[280px]">
+        {/* Viewfinder Container */}
+        <div
+          id={scannerElementId}
+          className="aspect-square w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-900 shadow-sm dark:border-slate-800"
+        />
 
-      {/* Viewfinder Frame with Overlay */}
-      <div style={{ position: 'relative', display: 'inline-block', width: '100%', maxWidth: 290 }}>
-        <div id={scannerElementId} />
-
-        {cameraStarted && (
-          <>
-            {/* Cyber Reticle Corners */}
-            <div className="scanner-corner top-left" />
-            <div className="scanner-corner top-right" />
-            <div className="scanner-corner bottom-left" />
-            <div className="scanner-corner bottom-right" />
-            
-            {/* Animated Laser Scan Line */}
-            {!isScanningLocked && <div className="scanner-laser-line" />}
-          </>
-        )}
-
-        {/* Locked / Verifying Overlay */}
+        {/* Verifying / Locked State Overlay */}
         {isScanningLocked && (
-          <div style={{
-            position: 'absolute',
-            inset: 0,
-            background: 'rgba(15, 23, 42, 0.75)',
-            backdropFilter: 'blur(4px)',
-            borderRadius: 18,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 20
-          }}>
-            <div style={{
-              width: 44,
-              height: 44,
-              borderRadius: '50%',
-              border: '3px solid rgba(255,255,255,0.2)',
-              borderTopColor: '#00e676',
-              animation: 'spin 0.8s linear infinite',
-              marginBottom: 12
-            }} />
-            <span style={{ color: '#fff', fontSize: 14, fontWeight: 600, letterSpacing: 0.5 }}>
-              Verifying QR Credential...
-            </span>
+          <div className="absolute inset-0 flex flex-col items-center justify-center rounded-xl bg-slate-900/80 p-4 text-white backdrop-blur-sm">
+            <Loader2 className="h-8 w-8 animate-spin text-indigo-400 mb-2" />
+            <span className="text-xs font-semibold">Verifying attendance...</span>
           </div>
         )}
       </div>
 
-      {/* Switch Camera Button (if device has front + back) */}
+      {/* Switch Camera Button (if multiple cameras detected) */}
       {cameras.length > 1 && (
-        <div style={{ marginTop: 8 }}>
+        <div className="mt-3">
           <button
-            onClick={switchCamera}
-            style={{
-              background: '#f1f5f9',
-              border: '1px solid #cbd5e1',
-              borderRadius: 20,
-              padding: '5px 14px',
-              fontSize: 12,
-              fontWeight: 500,
-              color: '#334155',
-              cursor: 'pointer'
-            }}
+            type="button"
+            onClick={handleSwitchCamera}
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
           >
-            🔄 Switch Camera
+            <SwitchCamera className="h-3.5 w-3.5" />
+            <span>Switch Camera</span>
           </button>
         </div>
       )}
 
+      {/* Error state */}
       {cameraError && (
-        <div style={{ 
-          margin: '12px auto 0', 
-          maxWidth: 290, 
-          padding: 14, 
-          background: 'rgba(239, 68, 68, 0.12)', 
-          color: '#fca5a5', 
-          borderRadius: 14, 
-          fontSize: 13, 
-          textAlign: 'left', 
-          border: '1px solid rgba(239, 68, 68, 0.3)' 
-        }}>
-          <div style={{ fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span>📷</span> Camera Notice
+        <div className="mt-3 w-full max-w-[280px] rounded-lg border border-rose-200 bg-rose-50 p-3 text-left text-xs text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300">
+          <div className="flex items-center gap-1.5 font-semibold">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>Camera Notice</span>
           </div>
-          <div style={{ fontSize: 12, color: '#e2e8f0', marginBottom: 10, lineHeight: 1.4 }}>
-            {cameraError}
-          </div>
+          <p className="mt-1 text-slate-600 dark:text-slate-400">{cameraError}</p>
           <button
+            type="button"
             onClick={initScanner}
-            style={{
-              padding: '6px 12px',
-              background: '#2563eb',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: 8,
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6
-            }}
+            className="mt-2.5 inline-flex items-center gap-1 rounded bg-rose-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-rose-700"
           >
-            🔄 Retry Camera Permission
+            <RefreshCw className="h-3 w-3" />
+            <span>Retry Camera</span>
           </button>
         </div>
       )}
