@@ -468,6 +468,98 @@ async function runAllTests() {
       { sessionId: concSessionId },
       { Authorization: `Bearer ${teacherToken}` }
     );
+
+    // ----------------------------------------------------
+    // 5. Duplicate Attendance Regression & API Safety Tests
+    // ----------------------------------------------------
+    console.log('\n[TEST GROUP 5: ALREADY_MARKED Regression & API Safety]');
+
+    // 5.1 Start a fresh session for regression tests
+    const regressionSession = await request(
+      'POST',
+      '/api/session/start',
+      { class_id: 'c1', mode: 'CODE' },
+      { Authorization: `Bearer ${teacherToken}` }
+    );
+    assert(regressionSession.status === 200, '[5.1] Regression session started');
+    const regCode = regressionSession.body.code;
+    const regSessionId = regressionSession.body.session.id;
+
+    // 5.2 First submission succeeds and returns ISO markedAt
+    const firstReg = await request('POST', '/api/attendance/mark', {
+      enrollmentNumber: 'STU006',
+      mode: 'CODE',
+      code: regCode
+    });
+    assert(firstReg.status === 200, '[5.2] First submission returns 200');
+    assert(firstReg.body.success === true, '[5.2] First submission success:true');
+    assert(typeof firstReg.body.markedAt === 'string', '[5.2] markedAt is present');
+    assert(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(firstReg.body.markedAt),
+      '[5.2] markedAt is ISO 8601 format'
+    );
+
+    // 5.3 session_secret must NOT appear in student-facing success response
+    assert(
+      !JSON.stringify(firstReg.body).includes('session_secret'),
+      '[5.3] session_secret NOT exposed in student success response'
+    );
+
+    // 5.4 Sequential duplicate returns 409 ALREADY_MARKED with enriched fields
+    const dupReg = await request('POST', '/api/attendance/mark', {
+      enrollmentNumber: 'STU006',
+      mode: 'CODE',
+      code: regCode
+    });
+    assert(dupReg.status === 409, '[5.4] Sequential duplicate returns 409');
+    assert(dupReg.body.code === 'ALREADY_MARKED', '[5.4] code is ALREADY_MARKED');
+    assert(typeof dupReg.body.student_name === 'string', '[5.4] student_name present in 409 body');
+    assert(typeof dupReg.body.class_name === 'string', '[5.4] class_name present in 409 body');
+    assert(typeof dupReg.body.markedAt === 'string', '[5.4] markedAt present in 409 body');
+    assert(typeof dupReg.body.verification_method === 'string', '[5.4] verification_method in 409 body');
+
+    // 5.5 DB uniqueness: third sequential attempt still returns ALREADY_MARKED (not 200)
+    const thirdAttempt = await request('POST', '/api/attendance/mark', {
+      enrollmentNumber: 'STU006',
+      mode: 'CODE',
+      code: regCode
+    });
+    assert(thirdAttempt.status === 409, '[5.5] Third sequential attempt still returns 409 ALREADY_MARKED (uniqueness)');
+    assert(thirdAttempt.body.code === 'ALREADY_MARKED', '[5.5] code is ALREADY_MARKED on third attempt');
+
+    // 5.6 Concurrent duplicate: send 3 simultaneous requests for same student
+    const [conc1, conc2, conc3] = await Promise.all([
+      request('POST', '/api/attendance/mark', { enrollmentNumber: 'STU007', mode: 'CODE', code: regCode }),
+      request('POST', '/api/attendance/mark', { enrollmentNumber: 'STU007', mode: 'CODE', code: regCode }),
+      request('POST', '/api/attendance/mark', { enrollmentNumber: 'STU007', mode: 'CODE', code: regCode })
+    ]);
+    const concSuccesses = [conc1, conc2, conc3].filter((r) => r.status === 200).length;
+    const concDuplicates = [conc1, conc2, conc3].filter((r) => r.status === 409).length;
+    assert(concSuccesses === 1, `[5.6] Exactly 1 of 3 concurrent requests succeeds (got ${concSuccesses})`);
+    assert(concDuplicates === 2, `[5.6] Exactly 2 of 3 concurrent requests get 409 (got ${concDuplicates})`);
+
+    // 5.7 DB uniqueness: fourth attempt after concurrent storm still returns ALREADY_MARKED
+    const fourthAttempt = await request('POST', '/api/attendance/mark', {
+      enrollmentNumber: 'STU007',
+      mode: 'CODE',
+      code: regCode
+    });
+    assert(fourthAttempt.status === 409, '[5.7] Post-concurrent attempt is also ALREADY_MARKED (DB uniqueness)');
+
+    // 5.8 session_secret not exposed in ALREADY_MARKED 409 response
+    assert(
+      !JSON.stringify(dupReg.body).includes('session_secret'),
+      '[5.8] session_secret NOT exposed in ALREADY_MARKED response'
+    );
+
+    // Cleanup regression session
+    await request(
+      'POST',
+      '/api/session/end',
+      { sessionId: regSessionId },
+      { Authorization: `Bearer ${teacherToken}` }
+    );
+
   } catch (err) {
     console.error('Test execution error:', err);
     totalFailed++;
@@ -485,3 +577,4 @@ runAllTests().catch((err) => {
   console.error(err);
   process.exit(1);
 });
+

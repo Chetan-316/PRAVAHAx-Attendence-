@@ -74,7 +74,7 @@ export class AttendanceService {
   ): Promise<
     | {
         success: true;
-        session: AttendanceSession;
+        session: Omit<AttendanceSession, 'session_secret'>;
         qr?: { token: string; secondsRemaining: number; rotationInterval: number };
         code?: string;
         codeInfo?: { code: string; secondsRemaining: number; rotationInterval: number };
@@ -128,15 +128,15 @@ export class AttendanceService {
       [sessionId, classId, teacherId, mode, code, sessionSecret, startedAt, 'ACTIVE']
     );
 
-    const session: AttendanceSession = {
+    // Safe session DTO — never expose session_secret to the browser
+    const sessionDto = {
       id: sessionId,
       class_id: classId,
       teacher_id: teacherId,
       mode,
       current_code: code,
-      session_secret: sessionSecret,
       started_at: startedAt,
-      status: 'ACTIVE'
+      status: 'ACTIVE' as const
     };
 
     if (mode === 'DYNAMIC_QR') {
@@ -145,7 +145,7 @@ export class AttendanceService {
 
     return {
       success: true,
-      session,
+      session: sessionDto as unknown as AttendanceSession,
       qr: qrInfo,
       code: code || undefined,
       codeInfo
@@ -158,7 +158,7 @@ export class AttendanceService {
   static async getActiveTeacherSession(teacherId: string): Promise<
     | {
         active: true;
-        session: AttendanceSession & { class_name: string; course: string };
+        session: Omit<AttendanceSession, 'session_secret'> & { class_name: string; course: string };
         qr?: { token: string; secondsRemaining: number; rotationInterval: number };
         current_code?: string;
         codeInfo?: { code: string; secondsRemaining: number; rotationInterval: number };
@@ -216,6 +216,7 @@ export class AttendanceService {
       currentCode = rot.code;
     }
 
+    // Safe session DTO — strip session_secret from browser response
     return {
       active: true,
       session: {
@@ -224,7 +225,6 @@ export class AttendanceService {
         teacher_id: session.teacher_id,
         mode: session.mode,
         current_code: currentCode || session.current_code,
-        session_secret: session.session_secret,
         started_at: session.started_at,
         status: session.status,
         class_name: session.class_name,
@@ -387,10 +387,21 @@ export class AttendanceService {
         course: string;
         student_name: string;
         enrollment_number: string;
+        /** ISO 8601 timestamp — format client-side */
+        markedAt: string;
+        /** Legacy locale-formatted time — kept for backward compat */
         time: string;
         verification_method: string;
       }
-    | ApiErrorResponse
+    | (ApiErrorResponse & {
+        /** Enriched ALREADY_MARKED fields (only present when code === 'ALREADY_MARKED') */
+        student_name?: string;
+        enrollment_number?: string;
+        class_name?: string;
+        course?: string;
+        markedAt?: string;
+        verification_method?: string;
+      })
   > {
     const cleanEnr = (params.enrollmentNumber || '').trim().toUpperCase();
     if (!cleanEnr) {
@@ -540,16 +551,23 @@ export class AttendanceService {
     }
 
     // 4. Duplicate Check & Atomic Insertion
-    const existingRecord = await db.queryOne(
-      `SELECT id FROM attendance_records WHERE session_id = $1 AND student_id = $2`,
+    const existingRecord = await db.queryOne<any>(
+      `SELECT id, marked_at, verification_method FROM attendance_records WHERE session_id = $1 AND student_id = $2`,
       [session.id, student.id]
     );
     if (existingRecord) {
+      // Return enriched ALREADY_MARKED so the frontend can display the original mark details
       return {
         success: false,
         error: `Attendance is already recorded for ${student.name} in this session`,
-        code: 'ALREADY_MARKED'
-      };
+        code: 'ALREADY_MARKED',
+        student_name: student.name,
+        enrollment_number: cleanEnr,
+        class_name: session.class_name,
+        course: session.course,
+        markedAt: existingRecord.marked_at,
+        verification_method: existingRecord.verification_method
+      } as any;
     }
 
     const recordId = crypto.randomUUID();
@@ -564,11 +582,22 @@ export class AttendanceService {
       );
     } catch (err: any) {
       if (err.code === '23505' || err.message?.includes('Duplicate')) {
+        // Race condition: another concurrent request won; fetch the winning record
+        const raceRecord = await db.queryOne<any>(
+          `SELECT id, marked_at, verification_method FROM attendance_records WHERE session_id = $1 AND student_id = $2`,
+          [session.id, student.id]
+        );
         return {
           success: false,
           error: `Attendance is already recorded for ${student.name} in this session`,
-          code: 'ALREADY_MARKED'
-        };
+          code: 'ALREADY_MARKED',
+          student_name: student.name,
+          enrollment_number: cleanEnr,
+          class_name: session.class_name,
+          course: session.course,
+          markedAt: raceRecord?.marked_at || markedAt,
+          verification_method: raceRecord?.verification_method || method
+        } as any;
       }
       throw err;
     }
@@ -580,6 +609,9 @@ export class AttendanceService {
       course: session.course,
       student_name: student.name,
       enrollment_number: cleanEnr,
+      // ISO timestamp — formatted client-side in the student's own locale
+      markedAt,
+      // Legacy field kept for backward compatibility
       time: new Date(markedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       verification_method: method
     };

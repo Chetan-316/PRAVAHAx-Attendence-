@@ -4,7 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import basicSsl from '@vitejs/plugin-basic-ssl'
 
 const plugins: any[] = [react(), tailwindcss()];
-if (!process.env.DISABLE_SSL) {
+if (!process.env.DISABLE_SSL && process.env.NODE_ENV !== 'test') {
   plugins.push(basicSsl() as any);
 }
 
@@ -17,3 +17,4 @@ export default defineConfig({
     }
   }
 })
+
