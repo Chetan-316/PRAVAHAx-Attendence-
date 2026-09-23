@@ -11,8 +11,8 @@ interface AttendanceCodePanelProps {
 
 export const AttendanceCodePanel: React.FC<AttendanceCodePanelProps> = ({
   code,
-  secondsRemaining = 4,
-  rotationInterval = 4
+  secondsRemaining = 5,
+  rotationInterval = 5
 }) => {
   const [copied, setCopied] = useState(false);
   const [countdown, setCountdown] = useState<number>(secondsRemaining || rotationInterval);

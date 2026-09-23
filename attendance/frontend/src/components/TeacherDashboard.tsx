@@ -115,20 +115,22 @@ export const TeacherDashboard: React.FC = () => {
     };
   }, [activeSession?.id, activeSession?.mode]);
 
-  // 3a. Poll Dynamic QR Token (every 3.8 - 4 seconds)
+  // 3a. Poll rotating QR token synchronized with server window boundary
   useEffect(() => {
     if (!activeSession || activeSession.mode !== 'DYNAMIC_QR') {
-      if (qrPollTimerRef.current) clearInterval(qrPollTimerRef.current);
+      if (qrPollTimerRef.current) clearTimeout(qrPollTimerRef.current);
       return;
     }
 
-    const pollQrToken = async () => {
+    let isSubscribed = true;
+
+    const fetchNextQr = async () => {
       try {
         const res = await fetch(`/api/session/qr-token?sessionId=${activeSession.id}`, {
           credentials: 'include'
         });
         const data = await res.json();
-        if (res.ok && data.token) {
+        if (res.ok && data.token && isSubscribed) {
           setActiveSession((prev) =>
             prev
               ? {
@@ -141,15 +143,27 @@ export const TeacherDashboard: React.FC = () => {
                 }
               : null
           );
+
+          // Synchronize to next server boundary (+ 60ms buffer to safely step into next window)
+          const delayMs = Math.max(200, Math.floor((data.secondsRemaining || 5) * 1000) + 60);
+          qrPollTimerRef.current = setTimeout(fetchNextQr, delayMs);
+        } else if (isSubscribed) {
+          qrPollTimerRef.current = setTimeout(fetchNextQr, 1000);
         }
       } catch (err) {
         console.warn('QR token polling error:', err);
+        if (isSubscribed) {
+          qrPollTimerRef.current = setTimeout(fetchNextQr, 2000);
+        }
       }
     };
 
-    qrPollTimerRef.current = setInterval(pollQrToken, (activeSession.qr?.rotationInterval || 4) * 1000);
+    const initialDelay = Math.max(200, Math.floor((activeSession.qr?.secondsRemaining || 5) * 1000) + 60);
+    qrPollTimerRef.current = setTimeout(fetchNextQr, initialDelay);
+
     return () => {
-      if (qrPollTimerRef.current) clearInterval(qrPollTimerRef.current);
+      isSubscribed = false;
+      if (qrPollTimerRef.current) clearTimeout(qrPollTimerRef.current);
     };
   }, [activeSession?.id, activeSession?.mode]);
 
@@ -367,14 +381,14 @@ export const TeacherDashboard: React.FC = () => {
             {activeSession.mode === 'DYNAMIC_QR' ? (
               <DynamicQrPanel
                 token={activeSession.qr?.token || ''}
-                secondsRemaining={activeSession.qr?.secondsRemaining || 4}
-                rotationInterval={activeSession.qr?.rotationInterval || 4}
+                secondsRemaining={activeSession.qr?.secondsRemaining || 5}
+                rotationInterval={activeSession.qr?.rotationInterval || 5}
               />
             ) : (
               <AttendanceCodePanel
                 code={activeSession.current_code || ''}
-                secondsRemaining={activeSession.codeInfo?.secondsRemaining || 4}
-                rotationInterval={activeSession.codeInfo?.rotationInterval || 4}
+                secondsRemaining={activeSession.codeInfo?.secondsRemaining || 5}
+                rotationInterval={activeSession.codeInfo?.rotationInterval || 5}
               />
             )}
 

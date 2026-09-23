@@ -11,7 +11,7 @@ interface DynamicQrPanelProps {
 export const DynamicQrPanel: React.FC<DynamicQrPanelProps> = ({
   token,
   secondsRemaining,
-  rotationInterval = 4
+  rotationInterval = 5
 }) => {
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [countdown, setCountdown] = useState<number>(secondsRemaining || rotationInterval);

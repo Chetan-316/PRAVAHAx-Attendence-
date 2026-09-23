@@ -403,23 +403,53 @@ export class AttendanceService {
         verification_method?: string;
       })
   > {
-    const cleanEnr = (params.enrollmentNumber || '').trim().toUpperCase();
-    if (!cleanEnr) {
+    const rawEnr = (params.enrollmentNumber || '').trim().toUpperCase();
+    if (!rawEnr) {
       return { success: false, error: 'Enrollment number is required', code: 'STUDENT_NOT_FOUND' };
     }
 
-    // 1. Resolve Student by institutional Enrollment Number
-    const student = await db.queryOne<User>(
+    // Auto-normalize common variations:
+    // STUD001 -> STU001, STU1 -> STU001, bare number '01' / '1' -> STU001
+    let normalizedEnr = rawEnr;
+    const studMatch = rawEnr.match(/^STUD0*(\d+)$/);
+    if (studMatch) {
+      normalizedEnr = `STU${String(parseInt(studMatch[1], 10)).padStart(3, '0')}`;
+    } else {
+      const stuMatch = rawEnr.match(/^STU0*(\d+)$/);
+      if (stuMatch) {
+        normalizedEnr = `STU${String(parseInt(stuMatch[1], 10)).padStart(3, '0')}`;
+      } else {
+        const bareNumMatch = rawEnr.match(/^0*(\d+)$/);
+        if (bareNumMatch) {
+          const num = parseInt(bareNumMatch[1], 10);
+          if (num >= 1 && num <= 999) {
+            normalizedEnr = `STU${String(num).padStart(3, '0')}`;
+          }
+        }
+      }
+    }
+
+    // 1. Resolve Student by institutional Enrollment Number (try normalized, then raw)
+    let student = await db.queryOne<User>(
       `SELECT id, name, email, role, student_id FROM users WHERE UPPER(student_id) = $1 AND role = 'STUDENT'`,
-      [cleanEnr]
+      [normalizedEnr]
     );
+    if (!student && normalizedEnr !== rawEnr) {
+      student = await db.queryOne<User>(
+        `SELECT id, name, email, role, student_id FROM users WHERE UPPER(student_id) = $1 AND role = 'STUDENT'`,
+        [rawEnr]
+      );
+    }
+
     if (!student) {
       return {
         success: false,
-        error: `Enrollment number "${cleanEnr}" is not registered in the institution system`,
+        error: `Enrollment number "${rawEnr}" is not registered in the institution system`,
         code: 'STUDENT_NOT_FOUND'
       };
     }
+
+    const cleanEnr = student.student_id || normalizedEnr;
 
     // 2. Resolve Active Session
     let session: (AttendanceSession & { class_name: string; course: string }) | null = null;

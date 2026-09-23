@@ -25,7 +25,10 @@ let fetchResponse: { ok: boolean; status: number; body: any } = { ok: true, stat
 
 // ── Logic-only tests (no DOM) ────────────────────────────────────────────────
 
-describe('Enrollment validation', () => {
+import { normalizeStudentEnrollment } from '../StudentAttendancePage';
+
+describe('Enrollment validation & normalization', () => {
+
   test('empty enrollment should not proceed to method selection', () => {
     const enrollment = '';
     const isValid = enrollment.trim().length > 0;
@@ -40,8 +43,22 @@ describe('Enrollment validation', () => {
 
   test('enrollment is auto-uppercased', () => {
     const input = 'stu001';
-    const normalized = input.trim().toUpperCase();
+    const normalized = normalizeStudentEnrollment(input);
     assert.equal(normalized, 'STU001');
+  });
+
+  test('enrollment STUD001 normalizes to STU001', () => {
+    assert.equal(normalizeStudentEnrollment('STUD001'), 'STU001');
+    assert.equal(normalizeStudentEnrollment('stud001'), 'STU001');
+    assert.equal(normalizeStudentEnrollment('STUD1'), 'STU001');
+  });
+
+  test('bare numbers like 01 and 1 normalize to STU001', () => {
+    assert.equal(normalizeStudentEnrollment('01'), 'STU001');
+    assert.equal(normalizeStudentEnrollment('1'), 'STU001');
+    assert.equal(normalizeStudentEnrollment('001'), 'STU001');
+    assert.equal(normalizeStudentEnrollment('15'), 'STU015');
+    assert.equal(normalizeStudentEnrollment('30'), 'STU030');
   });
 });
 

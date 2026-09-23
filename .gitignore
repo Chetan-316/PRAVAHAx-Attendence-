@@ -10,3 +10,5 @@ __MACOSX
 *.db-journal
 .vercel
 *.log
+
+.vercel

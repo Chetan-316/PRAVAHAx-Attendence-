@@ -2,9 +2,9 @@ import crypto from 'crypto';
 import { TeacherSessionPayload } from './types.js';
 
 export const CONFIG = {
-  QR_ROTATION_SECONDS: parseInt(process.env.QR_ROTATION_SECONDS || process.env.QR_ROTATION_INTERVAL_SECONDS || '4', 10),
+  QR_ROTATION_SECONDS: parseInt(process.env.QR_ROTATION_SECONDS || process.env.QR_ROTATION_INTERVAL_SECONDS || '5', 10),
   QR_TOLERANCE_SECONDS: parseInt(process.env.QR_TOLERANCE_SECONDS || '2', 10),
-  CODE_ROTATION_SECONDS: parseInt(process.env.CODE_ROTATION_SECONDS || process.env.CODE_ROTATION_INTERVAL_SECONDS || '4', 10),
+  CODE_ROTATION_SECONDS: parseInt(process.env.CODE_ROTATION_SECONDS || process.env.CODE_ROTATION_INTERVAL_SECONDS || '5', 10),
   CODE_TOLERANCE_SECONDS: parseInt(process.env.CODE_TOLERANCE_SECONDS || '2', 10),
   JWT_SECRET: process.env.JWT_SECRET || process.env.AUTH_SECRET || 'pravahax-prod-secret-fallback-key-for-local-dev-only-316',
   QR_SIGNING_SECRET: process.env.QR_SIGNING_SECRET || 'pravahax-qr-signing-key-for-local-dev-only-316',

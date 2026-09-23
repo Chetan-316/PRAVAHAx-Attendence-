@@ -1,6 +1,7 @@
 import { AttendanceService } from './_lib/attendanceService.js';
 import { verifyTeacherSession, CONFIG } from './_lib/crypto.js';
 import { TeacherSessionPayload, ApiErrorResponse } from './_lib/types.js';
+import { db } from './_lib/db.js';
 
 // Helper to parse cookies from incoming headers
 function parseCookies(cookieHeader: string = ''): Record<string, string> {
@@ -73,6 +74,30 @@ export default async function handler(req: any, res: any) {
   const isProduction = process.env.NODE_ENV === 'production';
 
   try {
+    // ==========================================
+    // HEALTH & DIAGNOSTICS
+    // ==========================================
+    if (pathname === '/api/health' || pathname === '/api/status') {
+      const isPg = db.isPostgres();
+      let dbStatus = 'connected';
+      let studentCount = 0;
+      try {
+        const users = await db.query("SELECT count(*) as count FROM users WHERE role = 'STUDENT'");
+        studentCount = Number(users[0]?.count || 0);
+      } catch (err: any) {
+        dbStatus = `query_error: ${err?.message || err}`;
+      }
+      return res.status(200).json({
+        status: 'healthy',
+        databaseType: isPg ? 'PostgreSQL' : 'In-Memory Relational (Zero-Config Fallback)',
+        databaseStatus: dbStatus,
+        registeredStudents: studentCount,
+        qrRotationSeconds: CONFIG.QR_ROTATION_SECONDS,
+        codeRotationSeconds: CONFIG.CODE_ROTATION_SECONDS,
+        timestamp: new Date().toISOString()
+      });
+    }
+
     // ==========================================
     // TEACHER AUTHENTICATION
     // ==========================================

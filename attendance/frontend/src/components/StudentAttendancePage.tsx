@@ -23,10 +23,37 @@ import {
   RefreshCw,
   AlertTriangle,
   Clock,
-  ShieldCheck
+  ShieldCheck,
+  X
 } from 'lucide-react';
 import { QrScanner } from './QrScanner';
 import { StatusMessage } from './StatusMessage';
+
+/**
+ * Normalizes user-entered enrollment identifiers:
+ * - STUD001 -> STU001
+ * - STU1 / STU01 -> STU001
+ * - Bare numbers '1' / '01' / '001' -> STU001
+ */
+export function normalizeStudentEnrollment(raw: string): string {
+  const clean = (raw || '').trim().toUpperCase();
+  const studMatch = clean.match(/^STUD0*(\d+)$/);
+  if (studMatch) {
+    return `STU${String(parseInt(studMatch[1], 10)).padStart(3, '0')}`;
+  }
+  const stuMatch = clean.match(/^STU0*(\d+)$/);
+  if (stuMatch) {
+    return `STU${String(parseInt(stuMatch[1], 10)).padStart(3, '0')}`;
+  }
+  const bareNumMatch = clean.match(/^0*(\d+)$/);
+  if (bareNumMatch) {
+    const num = parseInt(bareNumMatch[1], 10);
+    if (num >= 1 && num <= 999) {
+      return `STU${String(num).padStart(3, '0')}`;
+    }
+  }
+  return clean;
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
@@ -230,7 +257,7 @@ export const StudentAttendancePage: React.FC<StudentAttendancePageProps> = ({ on
   const isVerifying = phase === 'VERIFYING';
   const isTerminal = phase === 'SUCCESS' || phase === 'ALREADY_MARKED';
 
-  const enrollmentTrimmed = enrollment.trim().toUpperCase();
+  const enrollmentTrimmed = normalizeStudentEnrollment(enrollment);
 
   // ── Submit via QR ─────────────────────────────────────────────────────────────
 
@@ -457,13 +484,27 @@ export const StudentAttendancePage: React.FC<StudentAttendancePageProps> = ({ on
     setPhase('SCANNING');
   };
 
+  /** Clear enrollment and forget remembered student */
+  const handleClearEnrollment = () => {
+    setEnrollment('');
+    try {
+      localStorage.removeItem('pravahax_student_enrollment');
+    } catch {}
+    setPhase('DETAILS');
+    setActiveMethod(null);
+    setErrorMessage('');
+    setErrorCode('');
+  };
+
   /** Enter enrollment step */
   const handleEnrollmentContinue = () => {
-    if (!enrollmentTrimmed) {
+    const normalized = normalizeStudentEnrollment(enrollment);
+    if (!normalized) {
       setErrorMessage('Please enter your Enrollment Number to continue.');
       setErrorCode('');
       return;
     }
+    setEnrollment(normalized);
     setErrorMessage('');
     setErrorCode('');
     setPhase('METHOD');
@@ -527,35 +568,67 @@ export const StudentAttendancePage: React.FC<StudentAttendancePageProps> = ({ on
           )}
 
           {/* ── Enrollment Number ── */}
-          <div>
-            <label
-              htmlFor="student-enrollment"
-              className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300"
-            >
-              Enrollment Number
-            </label>
-            <input
-              id="student-enrollment"
-              type="text"
-              inputMode="text"
-              autoCapitalize="characters"
-              autoCorrect="off"
-              autoComplete="off"
-              spellCheck={false}
-              required
-              placeholder="e.g. STU001"
-              value={enrollment}
-              onChange={(e) => {
-                setEnrollment(e.target.value.toUpperCase());
-                if (phase !== 'DETAILS' && phase !== 'METHOD') {
-                  // If student edits enrollment, reset back to METHOD
-                  setPhase('METHOD');
-                  setActiveMethod(null);
-                }
-              }}
-              disabled={isVerifying || phase === 'SCANNING'}
-              className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-3 font-mono text-sm font-semibold uppercase text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20 disabled:bg-slate-50 disabled:opacity-70 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-800/50"
-            />
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label
+                htmlFor="student-enrollment"
+                className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300"
+              >
+                Enrollment Number
+              </label>
+              {enrollment && (
+                <button
+                  type="button"
+                  onClick={handleClearEnrollment}
+                  className="text-xs font-medium text-slate-500 hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400 transition"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="relative">
+              <input
+                id="student-enrollment"
+                type="text"
+                inputMode="text"
+                autoCapitalize="characters"
+                autoCorrect="off"
+                autoComplete="off"
+                spellCheck={false}
+                required
+                placeholder="e.g. STU001"
+                value={enrollment}
+                onBlur={() => {
+                  if (enrollment) {
+                    const norm = normalizeStudentEnrollment(enrollment);
+                    if (norm !== enrollment) setEnrollment(norm);
+                  }
+                }}
+                onChange={(e) => {
+                  setEnrollment(e.target.value.toUpperCase());
+                  if (phase !== 'DETAILS' && phase !== 'METHOD') {
+                    // If student edits enrollment, reset back to METHOD
+                    setPhase('METHOD');
+                    setActiveMethod(null);
+                  }
+                }}
+                disabled={isVerifying || phase === 'SCANNING'}
+                className="block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-3 pr-10 font-mono text-sm font-semibold uppercase text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20 disabled:bg-slate-50 disabled:opacity-70 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-800/50"
+              />
+              {enrollment && (
+                <button
+                  type="button"
+                  onClick={handleClearEnrollment}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
+                  aria-label="Clear enrollment"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Format: <span className="font-mono font-medium text-indigo-600 dark:text-indigo-400">STU001 – STU030</span> (e.g. STU001 is Chetan)
+            </p>
           </div>
 
           {/* ── DETAILS phase: Continue button ── */}

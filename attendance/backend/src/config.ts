@@ -3,11 +3,11 @@ dotenv.config();
 
 export const CONFIG = {
   // QR Rotation configuration
-  QR_ROTATION_INTERVAL_SECONDS: process.env.QR_ROTATION_INTERVAL_SECONDS ? parseInt(process.env.QR_ROTATION_INTERVAL_SECONDS, 10) : 4,
-  QR_EXPIRATION_GRACE_SECONDS: process.env.QR_EXPIRATION_GRACE_SECONDS ? parseInt(process.env.QR_EXPIRATION_GRACE_SECONDS, 10) : 4,
+  QR_ROTATION_INTERVAL_SECONDS: process.env.QR_ROTATION_INTERVAL_SECONDS ? parseInt(process.env.QR_ROTATION_INTERVAL_SECONDS, 10) : 5,
+  QR_EXPIRATION_GRACE_SECONDS: process.env.QR_EXPIRATION_GRACE_SECONDS ? parseInt(process.env.QR_EXPIRATION_GRACE_SECONDS, 10) : 3,
 
   // Code Mode configuration
-  CODE_ROTATION_INTERVAL_SECONDS: 10,
+  CODE_ROTATION_INTERVAL_SECONDS: 5,
 
   // Server & Security
   PORT: process.env.PORT ? parseInt(process.env.PORT, 10) : 4001,
